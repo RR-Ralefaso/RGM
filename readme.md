@@ -9,6 +9,7 @@
 ## About
 
  - built with  c++
+ - created by RR-Ralefaso (polaris)
 
 
 ## platforms
