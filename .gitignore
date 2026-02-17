@@ -1,2 +1,4 @@
-src/receiver
-src/sender
+#files to ignore
+
+receiver
+sender
