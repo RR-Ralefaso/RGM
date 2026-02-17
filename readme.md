@@ -28,8 +28,8 @@
  **ALWAYS RUN RECEIVER FIRST THEN SENDER**
   ## Linux
     - sudo apt install libx11-dev libsdl2-dev #needed once
-    - g++ -o sender sender.cpp `sdl2-config --cflags --libs` -lX11 -std=c++17 -pthread
-    - g++ -o receiver receiver.cpp `sdl2-config --cflags --libs` -std=c++17 -pthread
+    - g++ -o sender sender.cpp `sdl2-config --cflags --libs` -lX11 -std=c++17
+    - g++ -o receiver receiver.cpp `sdl2-config --cflags --libs` -std=c++17
     - ./receiver  #run first on the receiver device if Linux
     - ./sender   #run first on the sender device if linux
 
@@ -57,7 +57,5 @@
   <br>
   <b>ROOT ACCESS FOR EVERYONE</b>
 </p>
-
-
 
 
