@@ -2,8 +2,6 @@
 using namespace std;
 #include <cstring> // For strlen(), memset() - string/memory operations
 #include <string>   // For std::string operations
-#include <thread>   // For threading support (cross-platform compatibility)
-#include <chrono>   // For timing functions (not used but included for future)
 #include <fcntl.h>  // For file control (non-blocking I/O setup)
 
 #ifdef _WIN32                      // === WINDOWS-SPECIFIC HEADERS ===
@@ -24,12 +22,11 @@ using namespace std;
 void initSockets()
 {
 #ifdef _WIN32
-    WSADATA wsaData;               // Stores Winsock DLL version info
-    if (WSAStartup(MAKEWORD(2, 2), // Request Winsock version 2.2
-                   &wsaData) != 0)
-    { // Initialize networking stack
+    WSADATA wsaData;
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+    {
         cerr << "WSAStartup failed - cannot initialize networking" << endl;
-        exit(1); // Fatal error - no networking possible
+        exit(1);
     }
 #endif
 }
@@ -42,38 +39,37 @@ void cleanupSockets()
 #endif
 }
 
-// CRITICAL: Cross-platform function to read SINGLE KEY without Enter
-// Windows: Uses _getch() from conio.h
-// Linux: Temporarily disables canonical mode (line buffering)
+// ✅ FIXED: Cross-platform SINGLE KEY input WITH LOCAL ECHO
 char getch()
 {
 #ifdef _WIN32
-    char c = _getch(); // Windows: Direct console input, no Enter needed
+    char c = _getch(); // Get key without Enter
+    cout << c;    // ✅ ECHO LOCALLY - user sees what they type!
+    cout.flush(); // Force immediate display
     if (c == 13)
-        c = '\n';      // Convert Windows Enter (13) to Unix newline (10)
-    std::cout << c;    // Echo locally so user sees what they typed
-    std::cout.flush(); // Force immediate display
+        c = '\n'; // Convert Windows Enter (13) to Unix (10)
     return c;
 #else
-    // Linux/Mac: Switch terminal to RAW mode temporarily
-    struct termios oldt, newt;               // Terminal attribute structures
-    tcgetattr(STDIN_FILENO, &oldt);          // Save current terminal settings
-    newt = oldt;                             // Copy current settings
-    newt.c_lflag &= ~(ICANON | ECHO);        // Disable line buffering + echo
-    tcsetattr(STDIN_FILENO, TCSANOW, &newt); // Apply raw mode IMMEDIATELY
+    // Linux: Raw mode for instant key capture + echo
+    struct termios oldt, newt;
+    tcgetattr(STDIN_FILENO, &oldt); // Save current settings
+    newt = oldt;
+    newt.c_lflag &= ~(ICANON); // Disable line buffering (KEEP ECHO)
+    newt.c_lflag |= ECHO;      // ✅ ENSURE ECHO IS ENABLED
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
 
-    char c = getchar();                      // Read single character directly
-    tcsetattr(STDIN_FILENO, TCSANOW, &oldt); // Restore normal terminal mode
+    char c = getchar();                      // Read single character
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt); // Restore settings
     return c;
 #endif
 }
 
 int main()
 {
-    initSockets(); // Initialize networking (Windows only)
+    initSockets(); // Initialize networking
 
-    // === CREATE CLIENT SOCKET ===
-    int clientsocket = socket(AF_INET, SOCK_STREAM, 0); // TCP IPv4 socket
+    // Create client socket
+    int clientsocket = socket(AF_INET, SOCK_STREAM, 0);
     if (clientsocket < 0)
     {
         cerr << "Socket creation failed" << endl;
@@ -81,17 +77,17 @@ int main()
         return -1;
     }
 
-    // === SETUP SERVER ADDRESS ===
-    sockaddr_in serverAddr;                            // IPv4 address structure
-    memset(&serverAddr, 0, sizeof(serverAddr));        // Zero out structure
-    serverAddr.sin_family = AF_INET;                   // IPv4 protocol family
-    serverAddr.sin_port = htons(PORT);                 // Convert port to network byte order
-    serverAddr.sin_addr.s_addr = inet_addr(SERVER_IP); // IP string → binary
+    // Server address setup
+    sockaddr_in serverAddr;
+    memset(&serverAddr, 0, sizeof(serverAddr));
+    serverAddr.sin_family = AF_INET;
+    serverAddr.sin_port = htons(PORT);
+    serverAddr.sin_addr.s_addr = inet_addr(SERVER_IP);
 
-    // === CONNECT TO RECEIVER ===
+    // Connect to receiver
     if (connect(clientsocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0)
     {
-        cerr << "Connection failed - make sure receiver is running first!" << endl;
+        cerr << "Connection failed - start receiver first!" << endl;
 #ifdef _WIN32
         closesocket(clientsocket);
 #else
@@ -101,40 +97,51 @@ int main()
         return -1;
     }
 
-    cout << "🎉 LIVE TYPING ACTIVE! Type ANY key - appears instantly on receiver!" << endl;
-    cout << "💡 Type 'q' then Enter to quit" << endl
+    cout << "🎉 LIVE TYPING ACTIVE!" << endl;
+    cout << "💡 You WILL see what you type locally + receiver sees instantly!" << endl;
+    cout << "💡 Press 'q' then Enter to quit" << endl
          << endl;
 
-    // === INFINITE LIVE TYPING LOOP ===
+    // 🔥 LIVE TYPING LOOP WITH LOCAL ECHO
     while (true)
     {
-        char c = getch(); // ⚡ Get character IMMEDIATELY (NO ENTER needed)
+        char c = getch(); // ⚡ Get key + ECHO LOCALLY AUTOMATICALLY
 
-        // Handle Enter key
+        // Handle special keys
         if (c == '\n')
-        {
-            cout << endl; // New line locally
+        { // Enter pressed
+            cout << endl;
             continue;
         }
 
-        // Quit condition (simple 'q' detection)
-        if (c == 'q' && (std::cin.peek() == '\n' || std::cin.peek() == EOF))
+        // Simple quit (q + Enter)
+        if (c == 'q')
         {
-            send(clientsocket, ":q\n", 3, 0); // Send quit signal
-            cout << endl
-                 << "Sent quit signal..." << endl;
-            break;
+            char next = getch();
+            if (next == '\n')
+            {
+                send(clientsocket, ":q\n", 3, 0);
+                cout << endl
+                     << "Quit signal sent!" << endl;
+                break;
+            }
+            else
+            {
+                send(clientsocket, &c, 1, 0); // Send 'q' character
+                cout << next;                 // Echo next char locally
+                continue;
+            }
         }
 
-        // CRITICAL: Send SINGLE CHARACTER IMMEDIATELY to receiver
-        send(clientsocket, &c, 1, 0); // 1 byte transmission - instant!
+        // 🚀 Send to receiver INSTANTLY (user already sees it locally)
+        send(clientsocket, &c, 1, 0);
     }
 
-    // === CLEANUP ===
+    // Cleanup
 #ifdef _WIN32
-    closesocket(clientsocket); // Windows socket close
+    closesocket(clientsocket);
 #else
-    close(clientsocket); // Unix socket close
+    close(clientsocket);
 #endif
     cleanupSockets();
     cout << "Disconnected cleanly." << endl;
