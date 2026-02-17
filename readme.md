@@ -1,3 +1,8 @@
+<p align="center">
+  <img src="assets/icons/RGM.png" width="50" alt="RGM Logo">
+</p>
+
+
 # RPGM
 
 ## Reason for Building
