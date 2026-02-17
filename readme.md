@@ -24,7 +24,8 @@
 
 
 
-# Compile
+# Compile 
+ **ALWAYS RUN RECEIVER FIRST THEN SENDER**
   ## Linux
     - sudo apt install libx11-dev libsdl2-dev #needed once
     - g++ -o sender sender.cpp `sdl2-config --cflags --libs` -lX11 -std=c++17 -pthread
