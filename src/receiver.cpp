@@ -1,140 +1,124 @@
-#include <iostream> // Console I/O
-#include <cstring>  // Memory/string operations
-#include <string>   // String handling
-using namespace std;
-
-#ifdef _WIN32 // Windows headers
+#include <iostream>
+#include <cstring>
+#ifdef _WIN32
 #include <winsock2.h>
+#include <windows.h>
+#include <SDL.h>
 #pragma comment(lib, "ws2_32.lib")
-#else                   // Linux/Mac headers
-#include <sys/socket.h> // Core socket functions
-#include <netinet/in.h> // sockaddr_in structure
-#include <arpa/inet.h>  // IP conversion functions
-#include <unistd.h>     // close() function
+#pragma comment(lib, "SDL2.lib")
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <SDL2/SDL.h>
 #endif
 
-#define PORT 8080 // Port to listen on
+#define PORT 8081
+#define WIDTH 1280
+#define HEIGHT 720
 
-// Initialize networking (Windows only)
+// Initialize Windows networking
 void initSockets()
 {
 #ifdef _WIN32
-    WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
-    {
-        cerr << "WSAStartup failed" << endl;
-        exit(1);
-    }
-#endif
-}
-
-// Cleanup networking (Windows only)
-void cleanupSockets()
-{
-#ifdef _WIN32
-    WSACleanup();
+    WSADATA wsa;
+    WSAStartup(MAKEWORD(2, 2), &wsa);
 #endif
 }
 
 int main()
 {
-    initSockets(); // Setup networking
+    initSockets();
 
-    // === CREATE SERVER SOCKET ===
-    int serverSocket = socket(AF_INET, SOCK_STREAM, 0); // TCP server socket
-    if (serverSocket < 0)
-    {
-        cerr << "Server socket creation failed" << endl;
-        cleanupSockets();
-        return -1;
-    }
+    // === SETUP SERVER ===
+    std::cout << "📺 Starting screen receiver on port " << PORT << "..." << std::endl;
 
-    // === BIND TO PORT 8080 ===
-    sockaddr_in serverAddr;
-    memset(&serverAddr, 0, sizeof(serverAddr));
-    serverAddr.sin_family = AF_INET;         // IPv4
-    serverAddr.sin_port = htons(PORT);       // Network byte order
-    serverAddr.sin_addr.s_addr = INADDR_ANY; // Bind to ALL interfaces (0.0.0.0)
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    sockaddr_in server;
+    memset(&server, 0, sizeof(server));
+    server.sin_family = AF_INET;
+    server.sin_port = htons(PORT);
+    server.sin_addr.s_addr = INADDR_ANY; // Listen on all interfaces
 
-    if (bind(serverSocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0)
-    {
-        cerr << "Bind failed - port " << PORT << " already in use?" << endl;
-#ifdef _WIN32
-        closesocket(serverSocket);
-#else
-        close(serverSocket);
-#endif
-        cleanupSockets();
-        return -1;
-    }
-    cout << "✅ Server bound to port " << PORT << endl;
+    bind(server_fd, (struct sockaddr *)&server, sizeof(server));
+    listen(server_fd, 1); // Single client
 
-    // === START LISTENING ===
-    if (listen(serverSocket, 1) < 0)
-    { // Queue 1 connection
-        cerr << "Listen failed" << endl;
-#ifdef _WIN32
-        closesocket(serverSocket);
-#else
-        close(serverSocket);
-#endif
-        cleanupSockets();
-        return -1;
-    }
-    cout << "👂 Listening on port " << PORT << "..." << endl;
+    // === ACCEPT SENDER ===
+    sockaddr_in client_addr;
+    socklen_t client_len = sizeof(client_addr);
+    int client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &client_len);
 
-    // === ACCEPT CLIENT ===
-    sockaddr_in clientAddr;
-    socklen_t clientLen = sizeof(clientAddr);
-    int clientSocket = accept(serverSocket, (struct sockaddr *)&clientAddr, &clientLen);
-    if (clientSocket < 0)
-    {
-        cerr << "Accept failed" << endl;
-#ifdef _WIN32
-        closesocket(serverSocket);
-#else
-        close(serverSocket);
-#endif
-        cleanupSockets();
-        return -1;
-    }
+    std::cout << "✅ Screen sender connected!" << std::endl;
+    std::cout << "🎬 Opening display window..." << std::endl;
 
-    // Show connection details
-    cout << "🔗 Client connected: "
-         << inet_ntoa(clientAddr.sin_addr) << ":"
-         << ntohs(clientAddr.sin_port) << endl;
-    cout << "🚀 LIVE RECEIVER ACTIVE - typing appears INSTANTLY!" << endl;
-    cout << "==================================================" << endl
-         << endl;
+    // === SDL DISPLAY SETUP ===
+    SDL_Init(SDL_INIT_VIDEO);
+    SDL_Window *window = SDL_CreateWindow("🔴 LIVE SCREEN SHARE",
+                                          SDL_WINDOWPOS_CENTERED,
+                                          SDL_WINDOWPOS_CENTERED,
+                                          WIDTH / 2, HEIGHT / 2, // Half size for viewing
+                                          SDL_WINDOW_SHOWN);
 
-    // === LIVE CHARACTER-BY-CHARACTER DISPLAY ===
-    char ch; // Single character buffer
+    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    SDL_Texture *texture = SDL_CreateTexture(renderer,
+                                             SDL_PIXELFORMAT_RGB24,
+                                             SDL_TEXTUREACCESS_STREAMING,
+                                             WIDTH, HEIGHT);
+
+    // Pixel buffer for incoming frames
+    unsigned char *pixels = new unsigned char[WIDTH * HEIGHT * 3];
+    int frameCount = 0;
+
+    // === FRAME RECEIVE & DISPLAY LOOP ===
     while (true)
     {
-        int bytes = recv(clientSocket, &ch, 1, 0); // Read EXACTLY 1 byte
-
-        if (bytes <= 0)
-        { // Connection closed or error
-            cout << endl
-                 << "❌ Client disconnected" << endl;
+        // 1. READ FRAME SIZE (4 bytes)
+        uint32_t frameSize_net;
+        if (recv(client_fd, (char *)&frameSize_net, 4, 0) != 4)
+        {
             break;
         }
+        int frameSize = ntohl(frameSize_net);
 
-        // 🔥 PRINT IMMEDIATELY - NO BUFFERING!
-        cout << ch;
-        cout.flush(); // FORCE instant screen update
+        // 2. READ EXACT FRAME DATA
+        int totalReceived = 0;
+        while (totalReceived < frameSize)
+        {
+            int bytes = recv(client_fd, pixels + totalReceived,
+                             frameSize - totalReceived, 0);
+            if (bytes <= 0)
+                goto cleanup;
+            totalReceived += bytes;
+        }
+
+        // 3. DISPLAY FRAME
+        SDL_UpdateTexture(texture, NULL, pixels, WIDTH * 3);
+        SDL_RenderClear(renderer);
+        SDL_RenderCopy(renderer, texture, NULL, NULL);
+        SDL_RenderPresent(renderer);
+
+        frameCount++;
+        SDL_Delay(10); // Prevent over-rendering
     }
 
-    // === CLEANUP ===
-    cout << endl
-         << "Shutting down server..." << endl;
+cleanup:
+    std::cout << "📊 Received " << frameCount << " frames" << std::endl;
+    std::cout << "🔌 Connection closed" << std::endl;
+
+    // Cleanup
+    delete[] pixels;
+    SDL_DestroyTexture(texture);
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+
 #ifdef _WIN32
-    closesocket(clientSocket);
-    closesocket(serverSocket);
+    closesocket(client_fd);
+    closesocket(server_fd);
 #else
-    close(clientSocket);
-    close(serverSocket);
+    close(client_fd);
+    close(server_fd);
 #endif
-    cleanupSockets();
     return 0;
 }

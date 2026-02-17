@@ -20,9 +20,19 @@
 ## platforms
  - Windows
  - Linux
- - Andriod
  - macos
- - ios 
+
+# Install dependencies (ubuntu or linux)
+
+sudo apt install libx11-dev libsdl2-dev
+
+# Compile
+
+   - g++ -o sender sender.cpp -lX11 `sdl2-config --cflags --li`bs
+   - g++ -o receiver receiver.cpp `sdl2-config --libs`
+   - ./receiver  #run first on the receiver device 
+   - ./sender   #run first on the sender device
+
 
 
 -----
@@ -33,3 +43,7 @@
   <br>
   <b>ROOT ACCESS FOR EVERYONE</b>
 </p>
+
+
+
+

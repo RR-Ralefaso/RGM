@@ -1,149 +1,166 @@
-#include <iostream> // For cin, cout, cerr - console I/O
-using namespace std;
-#include <cstring> // For strlen(), memset() - string/memory operations
-#include <string>   // For std::string operations
-#include <fcntl.h>  // For file control (non-blocking I/O setup)
-
-#ifdef _WIN32                      // === WINDOWS-SPECIFIC HEADERS ===
-#include <winsock2.h>              // Windows socket API
-#include <conio.h>                 // For _getch() - single key input without Enter
-#pragma comment(lib, "ws2_32.lib") // Link Windows socket library
-#else                              // === LINUX/MACOS HEADERS ===
-#include <sys/socket.h>            // Socket functions: socket(), connect(), send(), recv()
-#include <arpa/inet.h>             // Network functions: inet_addr(), htons()
-#include <unistd.h>                // Unix functions: close()
-#include <termios.h>               // Terminal I/O settings for raw input mode
+#include <iostream> // Console input/output
+#include <cstring>  // Memory operations (memset)
+#include <chrono>   // Timing for FPS control
+#include <thread>   // Sleep functions
+#ifdef _WIN32       // Windows headers
+#include <winsock2.h>
+#include <windows.h> // Screen capture (BitBlt)
+#pragma comment(lib, "ws2_32.lib")
+#else                   // Linux headers
+#include <sys/socket.h> // Socket operations
+#include <arpa/inet.h>  // IP address conversion
+#include <unistd.h>     // close()
+#include <X11/Xlib.h>   // X11 screen capture
+#include <X11/Xutil.h>
 #endif
 
-#define SERVER_IP "127.0.0.1" // Localhost - receiver on same machine
-#define PORT 8080             // Standard TCP port for our connection
+#define SERVER_IP "127.0.0.1" // Receiver IP (localhost)
+#define PORT 8081             // TCP port
+#define WIDTH 1280            // Screen width (reduced for speed)
+#define HEIGHT 720            // Screen height (reduced for speed)
 
-// Initialize networking layer (Windows ONLY - Linux has it built-in)
+// Initialize Windows networking (Linux doesn't need this)
 void initSockets()
 {
 #ifdef _WIN32
-    WSADATA wsaData;
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
     {
-        cerr << "WSAStartup failed - cannot initialize networking" << endl;
+        std::cerr << "❌ Windows networking failed!" << std::endl;
         exit(1);
     }
 #endif
 }
 
-// Cleanup networking layer (Windows ONLY)
-void cleanupSockets()
-{
+// 🔥 Windows: Capture entire screen using BitBlt (fast!)
 #ifdef _WIN32
-    WSACleanup(); // Properly shutdown Winsock DLL
-#endif
-}
-
-// ✅ FIXED: Cross-platform SINGLE KEY input WITH LOCAL ECHO
-char getch()
+unsigned char *captureScreen(int &size)
 {
-#ifdef _WIN32
-    char c = _getch(); // Get key without Enter
-    cout << c;    // ✅ ECHO LOCALLY - user sees what they type!
-    cout.flush(); // Force immediate display
-    if (c == 13)
-        c = '\n'; // Convert Windows Enter (13) to Unix (10)
-    return c;
-#else
-    // Linux: Raw mode for instant key capture + echo
-    struct termios oldt, newt;
-    tcgetattr(STDIN_FILENO, &oldt); // Save current settings
-    newt = oldt;
-    newt.c_lflag &= ~(ICANON); // Disable line buffering (KEEP ECHO)
-    newt.c_lflag |= ECHO;      // ✅ ENSURE ECHO IS ENABLED
-    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    HDC screenDC = GetDC(NULL);               // Get screen device context
+    HDC memDC = CreateCompatibleDC(screenDC); // Memory DC for bitmap
+    HBITMAP bitmap = CreateCompatibleBitmap(screenDC, WIDTH, HEIGHT);
+    SelectObject(memDC, bitmap); // Select bitmap into DC
 
-    char c = getchar();                      // Read single character
-    tcsetattr(STDIN_FILENO, TCSANOW, &oldt); // Restore settings
-    return c;
-#endif
+    // Copy screen to bitmap (SRCCOPY = full color copy)
+    BitBlt(memDC, 0, 0, WIDTH, HEIGHT, screenDC, 0, 0, SRCCOPY);
+
+    // Setup bitmap info for pixel extraction
+    BITMAPINFOHEADER info = {0};
+    info.biSize = sizeof(BITMAPINFOHEADER);
+    info.biWidth = WIDTH;
+    info.biHeight = -HEIGHT; // Negative = top-down
+    info.biPlanes = 1;
+    info.biBitCount = 24; // 24-bit RGB
+    info.biCompression = BI_RGB;
+
+    size = WIDTH * HEIGHT * 3; // RGB = 3 bytes per pixel
+    unsigned char *pixels = new unsigned char[size];
+
+    // Extract raw RGB pixels from bitmap
+    GetDIBits(memDC, bitmap, 0, HEIGHT, pixels, (BITMAPINFO *)&info, DIB_RGB_COLORS);
+
+    // Cleanup GDI resources
+    DeleteObject(bitmap);
+    DeleteDC(memDC);
+    ReleaseDC(NULL, screenDC);
+
+    return pixels;
 }
+#endif
+
+// 🔥 Linux: Capture screen using X11 (fast!)
+#ifndef _WIN32
+unsigned char *captureScreen(int &size)
+{
+    Display *display = XOpenDisplay(NULL);    // Connect to X server
+    Window root = DefaultRootWindow(display); // Root window = full screen
+
+    // Capture screen image (ZPixmap = fast format)
+    XImage *image = XGetImage(display, root, 0, 0, WIDTH, HEIGHT,
+                              AllPlanes, ZPixmap);
+
+    size = WIDTH * HEIGHT * 3; // RGB output
+    unsigned char *pixels = new unsigned char[size];
+
+    // Convert X11 pixels to RGB (handles different depth formats)
+    for (int y = 0; y < HEIGHT; y++)
+    {
+        for (int x = 0; x < WIDTH; x++)
+        {
+            unsigned long pixel = XGetPixel(image, x, y);
+            int idx = (y * WIDTH + x) * 3;
+            pixels[idx + 0] = (pixel >> 16) & 0xFF; // Red
+            pixels[idx + 1] = (pixel >> 8) & 0xFF;  // Green
+            pixels[idx + 2] = pixel & 0xFF;         // Blue
+        }
+    }
+
+    XDestroyImage(image);
+    XCloseDisplay(display);
+    return pixels;
+}
+#endif
 
 int main()
 {
-    initSockets(); // Initialize networking
+    initSockets();
 
-    // Create client socket
-    int clientsocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (clientsocket < 0)
+    // === CREATE SOCKET & CONNECT ===
+    std::cout << "🎥 Starting screen capture..." << std::endl;
+    int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+
+    sockaddr_in server;
+    memset(&server, 0, sizeof(server));
+    server.sin_family = AF_INET;
+    server.sin_port = htons(PORT);
+    server.sin_addr.s_addr = inet_addr(SERVER_IP);
+
+    if (connect(socket_fd, (struct sockaddr *)&server, sizeof(server)) < 0)
     {
-        cerr << "Socket creation failed" << endl;
-        cleanupSockets();
-        return -1;
+        std::cerr << "❌ Cannot connect to receiver! Run screenshare_receiver first!" << std::endl;
+        return 1;
     }
+    std::cout << "✅ Connected to receiver!" << std::endl;
 
-    // Server address setup
-    sockaddr_in serverAddr;
-    memset(&serverAddr, 0, sizeof(serverAddr));
-    serverAddr.sin_family = AF_INET;
-    serverAddr.sin_port = htons(PORT);
-    serverAddr.sin_addr.s_addr = inet_addr(SERVER_IP);
+    // === 10 FPS SCREEN STREAMING LOOP ===
+    auto lastFrame = std::chrono::steady_clock::now();
+    int frameCount = 0;
 
-    // Connect to receiver
-    if (connect(clientsocket, (struct sockaddr *)&serverAddr, sizeof(serverAddr)) < 0)
-    {
-        cerr << "Connection failed - start receiver first!" << endl;
-#ifdef _WIN32
-        closesocket(clientsocket);
-#else
-        close(clientsocket);
-#endif
-        cleanupSockets();
-        return -1;
-    }
-
-    cout << "🎉 LIVE TYPING ACTIVE!" << endl;
-    cout << "💡 You WILL see what you type locally + receiver sees instantly!" << endl;
-    cout << "💡 Press 'q' then Enter to quit" << endl
-         << endl;
-
-    // 🔥 LIVE TYPING LOOP WITH LOCAL ECHO
     while (true)
     {
-        char c = getch(); // ⚡ Get key + ECHO LOCALLY AUTOMATICALLY
+        // 1. CAPTURE SCREEN
+        int frameSize;
+        unsigned char *frame = captureScreen(frameSize);
 
-        // Handle special keys
-        if (c == '\n')
-        { // Enter pressed
-            cout << endl;
-            continue;
-        }
+        // 2. SEND FRAME SIZE FIRST (4 bytes - network byte order)
+        uint32_t size_net = htonl(frameSize);
+        send(socket_fd, &size_net, 4, 0);
 
-        // Simple quit (q + Enter)
-        if (c == 'q')
+        // 3. SEND RAW PIXEL DATA
+        send(socket_fd, frame, frameSize, 0);
+        delete[] frame;
+
+        frameCount++;
+
+        // 4. 10 FPS LIMIT (100ms per frame)
+        auto now = std::chrono::steady_clock::now();
+        if (now - lastFrame < std::chrono::milliseconds(100))
         {
-            char next = getch();
-            if (next == '\n')
-            {
-                send(clientsocket, ":q\n", 3, 0);
-                cout << endl
-                     << "Quit signal sent!" << endl;
-                break;
-            }
-            else
-            {
-                send(clientsocket, &c, 1, 0); // Send 'q' character
-                cout << next;                 // Echo next char locally
-                continue;
-            }
+            std::this_thread::sleep_until(lastFrame + std::chrono::milliseconds(100));
         }
+        lastFrame = now;
 
-        // 🚀 Send to receiver INSTANTLY (user already sees it locally)
-        send(clientsocket, &c, 1, 0);
+        // FPS counter
+        if (frameCount % 100 == 0)
+        {
+            std::cout << "📊 Sent " << frameCount << " frames" << std::endl;
+        }
     }
 
-    // Cleanup
 #ifdef _WIN32
-    closesocket(clientsocket);
+    closesocket(socket_fd);
 #else
-    close(clientsocket);
+    close(socket_fd);
 #endif
-    cleanupSockets();
-    cout << "Disconnected cleanly." << endl;
     return 0;
 }
