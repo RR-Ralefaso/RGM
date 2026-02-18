@@ -1,38 +1,48 @@
+/**
+ * ============================================================================
+ * DISCOVER.H - SSDP AUTO-DISCOVERY API HEADER
+ * ============================================================================
+ * This header defines the interface for UPnP/SSDP-based zero-configuration
+ * network discovery of screen receivers. It provides functions to discover
+ * devices on the local network without manual IP configuration.
+ *
+ * The SSDP protocol works by:
+ * 1. Sending multicast M-SEARCH requests to 239.255.255.250:1900
+ * 2. Receiving HTTP-style responses from receivers
+ * 3. Parsing LOCATION headers to extract IP:PORT endpoints
+ */
+
 #ifndef DISCOVER_H
 #define DISCOVER_H
 
-#include <vector>
-#include <string>
+#include <vector> // For dynamic list of discovered devices
+#include <string> // For IP address and service UUID strings
 
 /**
  * ============================================================================
- * SSDP AUTO-DISCOVERY API (UPnP Standard)
+ * DISCOVEREDDEVICE STRUCTURE
  * ============================================================================
- * PURPOSE: Zero-configuration LAN device discovery using multicast SSDP protocol
- * BENEFITS:
- *  - No manual IP entry required
- *  - No port forwarding needed
- *  - Works across subnets (TTL=2)
- *  - Industry standard (used by Chromecast, Smart TVs, IoT devices)
+ * Represents a single screen receiver found on the network.
+ * Stores all necessary connection information for the sender.
  */
-
 struct DiscoveredDevice
 {
-    std::string ip_address;   // Receiver LAN IP (ex: "192.168.1.100")
-    int tcp_port;             // TCP port for screen streaming (default: 8081)
-    std::string service_uuid; // Unique device identifier (future pinning)
+    std::string ip_address;   // IPv4 address as string (e.g., "192.168.1.100")
+    int tcp_port;             // TCP port for screen streaming (typically 8081)
+    std::string service_uuid; // Universal Unique ID for service identification
 
     /**
-     * Constructor for discovered devices
-     * @param ip Receiver IP address from SSDP LOCATION header
-     * @param port TCP streaming port (parsed from LOCATION URL)
-     * @param uuid Service UUID (optional)
+     * Constructor - Creates a discovered device record
+     * @param ip The IP address extracted from SSDP LOCATION header
+     * @param port The TCP port parsed from URL (defaults to 8081)
+     * @param uuid Optional service identifier for future features
      */
     DiscoveredDevice(const std::string &ip, int port, const std::string &uuid = "")
         : ip_address(ip), tcp_port(port), service_uuid(uuid) {}
 
     /**
-     * Human-readable device string (IP:PORT format)
+     * Converts device info to human-readable format
+     * @return String like "192.168.1.100:8081"
      */
     std::string toString() const
     {
@@ -41,26 +51,42 @@ struct DiscoveredDevice
 };
 
 /**
- * MAIN DISCOVERY FUNCTION
- * ========================
- * Sends SSDP M-SEARCH multicast and collects receiver responses
- * @return Vector of all discovered screen receivers (3-second scan)
+ * ============================================================================
+ * PRIMARY DISCOVERY FUNCTION
+ * ============================================================================
+ * Performs network scan for screen receivers using SSDP.
+ * @return Vector of all discovered devices (empty if none found)
+ *
+ * Implementation details:
+ * - Creates UDP multicast socket
+ * - Sends M-SEARCH request for "urn:screen-share:receiver" service
+ * - Waits 3 seconds for responses
+ * - Parses LOCATION headers for IP and port
+ * - Deduplicates devices by IP address
  */
 std::vector<DiscoveredDevice> discoverReceivers();
 
 /**
+ * ============================================================================
  * QUICK AVAILABILITY CHECK
- * ========================
- * Fast test - returns true if any receivers detected
+ * ============================================================================
+ * Fast test to check if any receivers exist on network.
+ * @return true if at least one receiver responds
+ *
+ * Used for initial UI feedback or quick network checks.
  */
 bool hasReceivers();
 
 /**
- * FORMAT DEVICE LIST FOR UI
- * =========================
- * Creates numbered list for user selection display
- * @param devices List from discoverReceivers()
- * @return Formatted string with [0] 192.168.1.100:8081 format
+ * ============================================================================
+ * DEVICE LIST FORMATTER
+ * ============================================================================
+ * Creates a formatted string for displaying devices in console UI.
+ * @param devices Vector of discovered devices from discoverReceivers()
+ * @return Formatted string with numbered list:
+ *         📱 DISCOVERED SCREEN RECEIVERS:
+ *           [0] 192.168.1.100:8081
+ *           [1] 192.168.1.101:8081
  */
 std::string listDevices(const std::vector<DiscoveredDevice> &devices);
 

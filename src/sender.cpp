@@ -1,60 +1,81 @@
-#include <iostream>   // Console output for status messages and user input
-#include <cstring>    // memset() for socket address structure initialization
-#include <chrono>     // std::chrono for precise 10 FPS frame timing control
-#include <thread>     // std::this_thread::sleep_until() for smooth frame pacing
-#include <vector>     // Dynamic pixel buffer storage (RGB24 format)
-#include "discover.h" // SSDP auto-discovery module (zero-config device finding)
+/**
+ * ============================================================================
+ * SENDER.CPP - SCREEN SHARING SENDER WITH SSDP AUTO-DISCOVERY
+ * ============================================================================
+ * This program captures the screen and streams it to a discovered receiver.
+ * Features:
+ * - Automatic device discovery via SSDP (no manual IP entry)
+ * - Cross-platform screen capture (Windows GDI / Linux X11)
+ * - Precise 10 FPS frame timing
+ * - Reliable TCP streaming with length-prefixed frames
+ *
+ * Workflow:
+ * 1. Discover receivers on network using SSDP
+ * 2. Present list to user for selection
+ * 3. Connect to selected receiver via TCP
+ * 4. Continuously capture and stream screen frames
+ */
+
+#include <iostream>   // Console output for status and user input
+#include <cstring>    // memset() for socket structures
+#include <chrono>     // High-precision timing for FPS control
+#include <thread>     // sleep_until for frame pacing
+#include <vector>     // Dynamic pixel buffer storage
+#include "discover.h" // SSDP auto-discovery module
 
 /**
  * ============================================================================
- * PLATFORM-SPECIFIC NETWORKING AND SCREEN CAPTURE HEADERS
+ * PLATFORM-SPECIFIC HEADERS
  * ============================================================================
- * Windows: Winsock2 + GDI (fastest screen capture method)
- * Linux: POSIX sockets + X11 (root window capture)
+ * Windows: Winsock2 + GDI for fastest screen capture
+ * Linux: POSIX sockets + X11 for root window capture
  */
 #ifdef _WIN32
-#include <winsock2.h>              // Windows socket API (WSAStartup, connect, send)
-#include <windows.h>               // GDI screen capture (GetDC, BitBlt, CreateCompatibleBitmap)
-#pragma comment(lib, "ws2_32.lib") // Automatically link Windows socket library
+#include <winsock2.h>              // Windows socket API
+#include <windows.h>               // GDI screen capture functions
+#pragma comment(lib, "ws2_32.lib") // Auto-link Winsock
 #else
-#include <sys/socket.h> // POSIX socket functions (socket, connect, send)
-#include <netinet/in.h> // sockaddr_in address structure
-#include <arpa/inet.h>  // inet_pton() for IP address conversion
-#include <unistd.h>     // close() function for socket cleanup
+#include <sys/socket.h> // POSIX socket functions
+#include <netinet/in.h> // sockaddr_in structure
+#include <arpa/inet.h>  // inet_pton for IP conversion
+#include <unistd.h>     // close() for socket cleanup
 #include <X11/Xlib.h>   // X11 display server connection
-#include <X11/Xutil.h>  // X11 utilities (DefaultRootWindow, XGetImage)
+#include <X11/Xutil.h>  // X11 utilities (root window, XGetImage)
 #endif
 
 // ============================================================================
-// STREAMING CONFIGURATION (Optimized for performance)
+// STREAMING CONFIGURATION
 // ============================================================================
-#define SCREEN_WIDTH 1280 // 720p resolution (fast capture + low bandwidth)
-#define SCREEN_HEIGHT 720
-#define TARGET_FPS 10                         // 10 FPS = smooth motion + ~3MB/s bandwidth
-#define BYTES_PER_PIXEL 3                     // RGB24 format (no alpha channel needed)
+#define SCREEN_WIDTH 1280                     // Capture width (720p for good balance)
+#define SCREEN_HEIGHT 720                     // Capture height
+#define TARGET_FPS 10                         // 10 FPS = smooth motion, ~3MB/s bandwidth
+#define BYTES_PER_PIXEL 3                     // RGB24 format (no alpha)
 #define FRAME_INTERVAL_MS (1000 / TARGET_FPS) // 100ms between frames
 
 /**
  * ============================================================================
  * CROSS-PLATFORM TCP SOCKET CLASS
  * ============================================================================
- * Abstracts Windows SOCKET vs Unix int socket differences
- * Provides reliable TCP send with automatic partial-send handling
+ * RAII wrapper for TCP sockets that handles Windows/Unix differences.
+ * Provides reliable sending with automatic partial-send handling.
  */
 class NetworkSocket
 {
 private:
 #ifdef _WIN32
-    SOCKET socket_fd; // Windows socket handle type
+    SOCKET socket_fd; // Windows uses SOCKET type (actually a pointer)
 #else
-    int socket_fd; // Unix/Linux file descriptor
+    int socket_fd; // Unix uses integer file descriptors
 #endif
 
 public:
-    NetworkSocket() : socket_fd(-1) {} // Invalid socket initially
+    /**
+     * Constructor - Initializes with invalid socket
+     */
+    NetworkSocket() : socket_fd(-1) {}
 
     /**
-     * Destructor automatically closes socket (RAII)
+     * Destructor - Automatically closes socket (RAII principle)
      */
     ~NetworkSocket()
     {
@@ -62,14 +83,17 @@ public:
     }
 
     /**
-     * Connect to discovered receiver via TCP
-     * @param ip Receiver IP from SSDP discovery (ex: "192.168.1.100")
-     * @param port TCP streaming port (usually 8081)
+     * Connect to discovered receiver
+     * @param ip Receiver IP address (e.g., "192.168.1.100")
+     * @param port TCP port for streaming (typically 8081)
      * @return true if connection successful
      */
     bool connect(const std::string &ip, int port)
     {
-        // Windows: Initialize Winsock networking stack (one-time call)
+        /**
+         * Windows: Initialize Winsock (required once per process)
+         * This loads the Windows networking stack
+         */
 #ifdef _WIN32
         WSADATA wsa_data;
         if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0)
@@ -79,7 +103,11 @@ public:
         }
 #endif
 
-        // Create TCP stream socket (reliable, ordered delivery)
+        /**
+         * Create TCP socket
+         * SOCK_STREAM = TCP (reliable, ordered delivery)
+         * 0 = default protocol (TCP for this family)
+         */
         socket_fd = socket(AF_INET, SOCK_STREAM, 0);
         if (socket_fd < 0)
         {
@@ -87,14 +115,19 @@ public:
             return false;
         }
 
-        // Setup receiver network address
+        /**
+         * Set up receiver address structure
+         */
         sockaddr_in server_address;
-        memset(&server_address, 0, sizeof(server_address));       // Zero structure
-        server_address.sin_family = AF_INET;                      // IPv4 protocol family
-        server_address.sin_port = htons(port);                    // Convert to network byte order
-        inet_pton(AF_INET, ip.c_str(), &server_address.sin_addr); // IP string → binary
+        memset(&server_address, 0, sizeof(server_address));       // Zero out structure
+        server_address.sin_family = AF_INET;                      // IPv4
+        server_address.sin_port = htons(port);                    // Port in network byte order
+        inet_pton(AF_INET, ip.c_str(), &server_address.sin_addr); // Convert IP string to binary
 
-        // Establish TCP connection (3-way handshake)
+        /**
+         * Establish TCP connection (3-way handshake)
+         * This blocks until connection is established or fails
+         */
         if (::connect(socket_fd, (sockaddr *)&server_address, sizeof(server_address)) < 0)
         {
             std::cerr << "❌ TCP connection failed to " << ip << ":" << port << std::endl;
@@ -106,18 +139,21 @@ public:
     }
 
     /**
-     * Reliable TCP send - handles partial sends automatically
-     * TCP may split large frames into multiple packets
-     * @param data Pointer to frame data (size prefix + pixels)
+     * Reliable TCP send - handles partial sends
+     * TCP may split large messages into multiple packets
+     * @param data Pointer to data to send
      * @param size Total bytes to send
      * @return true if all bytes transmitted successfully
      */
     bool send(const void *data, size_t size)
     {
-        const uint8_t *bytes = static_cast<const uint8_t *>(data);
-        size_t total_sent = 0;
+        const uint8_t *bytes = static_cast<const uint8_t *>(data); // Byte pointer for arithmetic
+        size_t total_sent = 0;                                     // Track bytes sent
 
-        // Continue sending until all bytes transmitted
+        /**
+         * Continue until all bytes are transmitted
+         * Handles case where send() doesn't send everything at once
+         */
         while (total_sent < size)
         {
             ssize_t sent = ::send(socket_fd, (const char *)(bytes + total_sent),
@@ -125,86 +161,105 @@ public:
             if (sent <= 0)
             {
                 std::cerr << "❌ Send failed (connection lost?)" << std::endl;
-                return false;
+                return false; // Connection broken
             }
-            total_sent += sent;
+            total_sent += sent; // Update progress
         }
-        return true;
+        return true; // All bytes sent
     }
 
     /**
      * Platform-safe socket cleanup
+     * Closes socket and cleans up Windows networking
      */
     void closeSocket()
     {
-        if (socket_fd >= 0)
+        if (socket_fd >= 0) // Valid socket?
         {
 #ifdef _WIN32
-            closesocket(socket_fd); // Windows socket cleanup
-            WSACleanup();           // Windows networking cleanup
+            closesocket(socket_fd); // Windows-specific close
+            WSACleanup();           // Unload Winsock
 #else
-            ::close(socket_fd); // Unix file descriptor cleanup
+            ::close(socket_fd); // Unix close
 #endif
-            socket_fd = -1;
+            socket_fd = -1; // Mark as invalid
         }
     }
 };
 
 /**
  * ============================================================================
- * PLATFORM-SPECIFIC SCREEN CAPTURE FUNCTIONS
+ * WINDOWS SCREEN CAPTURE (GDI)
  * ============================================================================
- * Returns RGB24 pixel buffer (1280x720x3 bytes = ~2.7MB per frame)
- */
-
-/**
- * Windows: GDI BitBlt - Fastest screen capture method (<10ms/frame)
+ * Uses Windows GDI BitBlt for fastest screen capture.
+ * This is hardware-accelerated on most systems.
  */
 #ifdef _WIN32
 std::vector<uint8_t> captureScreen()
 {
+    // Allocate pixel buffer (1280x720x3 = ~2.76MB)
     std::vector<uint8_t> pixel_buffer(SCREEN_WIDTH * SCREEN_HEIGHT * BYTES_PER_PIXEL);
 
-    // Get primary monitor device context (entire desktop)
-    HDC screen_dc = GetDC(NULL);                   // Capture source
+    // Get device context for entire screen
+    HDC screen_dc = GetDC(NULL);                   // NULL = entire desktop
     HDC memory_dc = CreateCompatibleDC(screen_dc); // Offscreen buffer
     HBITMAP bitmap_handle = CreateCompatibleBitmap(screen_dc, SCREEN_WIDTH, SCREEN_HEIGHT);
 
-    // Copy screen pixels to memory bitmap (hardware accelerated)
-    SelectObject(memory_dc, bitmap_handle);
+    /**
+     * Copy screen to memory bitmap
+     * BitBlt is hardware-accelerated and very fast
+     */
+    SelectObject(memory_dc, bitmap_handle);              // Select bitmap into DC
     BitBlt(memory_dc, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, // Destination
            screen_dc, 0, 0, SRCCOPY);                    // Source (top-left)
 
-    // Extract raw RGB pixels from bitmap
+    /**
+     * Configure bitmap info structure for extraction
+     */
     BITMAPINFOHEADER bitmap_info = {0};
     bitmap_info.biSize = sizeof(BITMAPINFOHEADER);
     bitmap_info.biWidth = SCREEN_WIDTH;
     bitmap_info.biHeight = -SCREEN_HEIGHT; // Negative = top-down bitmap
     bitmap_info.biPlanes = 1;
-    bitmap_info.biBitCount = 24; // RGB24 format
-    bitmap_info.biCompression = BI_RGB;
+    bitmap_info.biBitCount = 24;        // 24 bits = RGB24
+    bitmap_info.biCompression = BI_RGB; // No compression
 
+    /**
+     * Extract raw RGB pixels from bitmap
+     * GetDIBits copies the bitmap data to our buffer
+     */
     GetDIBits(memory_dc, bitmap_handle, 0, SCREEN_HEIGHT,
               pixel_buffer.data(), (BITMAPINFO *)&bitmap_info, DIB_RGB_COLORS);
 
-    // Cleanup GDI resources (prevent memory leaks)
+    /**
+     * Clean up GDI resources
+     * Critical to prevent memory leaks
+     */
     DeleteObject(bitmap_handle);
     DeleteDC(memory_dc);
     ReleaseDC(NULL, screen_dc);
 
-    return pixel_buffer;
+    return pixel_buffer; // Return captured frame
 }
 #endif
 
 /**
- * Linux: X11 Root Window Capture - Captures primary display
+ * ============================================================================
+ * LINUX SCREEN CAPTURE (X11)
+ * ============================================================================
+ * Captures root window using X11 API.
+ * Slower than GDI but works on all Unix-like systems.
  */
 #ifndef _WIN32
 std::vector<uint8_t> captureScreen()
 {
+    // Allocate pixel buffer
     std::vector<uint8_t> pixel_buffer(SCREEN_WIDTH * SCREEN_HEIGHT * BYTES_PER_PIXEL);
 
-    // Connect to X11 display server (default :0 display)
+    /**
+     * Connect to X11 display server
+     * :0 is usually the primary display
+     */
     Display *x11_display = XOpenDisplay(NULL);
     if (!x11_display)
     {
@@ -212,28 +267,35 @@ std::vector<uint8_t> captureScreen()
         return pixel_buffer; // Return empty/black frame
     }
 
-    Window root_window = DefaultRootWindow(x11_display); // Primary screen
+    Window root_window = DefaultRootWindow(x11_display); // Get root window
 
-    // Capture screen region (ZPixmap = fastest format)
+    /**
+     * Capture screen region
+     * ZPixmap = format with pixel values (fastest)
+     */
     XImage *x11_image = XGetImage(x11_display, root_window, 0, 0,
                                   SCREEN_WIDTH, SCREEN_HEIGHT,
                                   AllPlanes, ZPixmap);
 
-    // Convert X11 pixels to RGB24 (handles 24/32-bit depth automatically)
+    /**
+     * Convert X11 image to RGB24 format
+     * X11 may use 24-bit or 32-bit pixels
+     */
     for (int y = 0; y < SCREEN_HEIGHT; ++y)
     {
         for (int x = 0; x < SCREEN_WIDTH; ++x)
         {
-            unsigned long x11_pixel = XGetPixel(x11_image, x, y);
+            unsigned long x11_pixel = XGetPixel(x11_image, x, y); // Get pixel value
             size_t pixel_index = (y * SCREEN_WIDTH + x) * BYTES_PER_PIXEL;
 
-            pixel_buffer[pixel_index + 0] = (x11_pixel >> 16) & 0xFF; // Red channel
-            pixel_buffer[pixel_index + 1] = (x11_pixel >> 8) & 0xFF;  // Green channel
-            pixel_buffer[pixel_index + 2] = (x11_pixel >> 0) & 0xFF;  // Blue channel
+            // X11 typically stores as 0xRRGGBB (big endian)
+            pixel_buffer[pixel_index + 0] = (x11_pixel >> 16) & 0xFF; // Red
+            pixel_buffer[pixel_index + 1] = (x11_pixel >> 8) & 0xFF;  // Green
+            pixel_buffer[pixel_index + 2] = (x11_pixel >> 0) & 0xFF;  // Blue
         }
     }
 
-    // Cleanup X11 resources
+    // Clean up X11 resources
     XDestroyImage(x11_image);
     XCloseDisplay(x11_display);
 
@@ -243,12 +305,13 @@ std::vector<uint8_t> captureScreen()
 
 /**
  * ============================================================================
- * MAIN PROGRAM - Zero-Config Screen Sharing Workflow
+ * MAIN PROGRAM - Zero-Config Screen Sharing
  * ============================================================================
- * 1. SSDP auto-discovery finds receivers (no IP entry needed)
- * 2. User selects target device from list
- * 3. Establishes TCP connection
- * 4. Streams screen continuously at 10 FPS
+ * Steps:
+ * 1. SSDP discovery finds receivers automatically
+ * 2. User selects target from list
+ * 3. TCP connection established
+ * 4. Screen streaming at 10 FPS
  */
 int main()
 {
@@ -258,31 +321,48 @@ int main()
     std::cout << "========================================" << std::endl
               << std::endl;
 
-    // === STEP 1: AUTOMATIC DEVICE DISCOVERY ===
+    /**
+     * STEP 1: DISCOVER RECEIVERS
+     * ==========================
+     * SSDP multicast discovery scans network
+     */
     std::vector<DiscoveredDevice> available_receivers = discoverReceivers();
 
     if (available_receivers.empty())
     {
         std::cerr << "❌ No screen receivers found on network!" << std::endl;
         std::cerr << "💡 Start 'receiver' on target device first" << std::endl;
-        return 1;
+        return 1; // Exit with error
     }
 
-    // === STEP 2: DISPLAY DISCOVERED DEVICES ===
+    /**
+     * STEP 2: DISPLAY DISCOVERED DEVICES
+     * ==================================
+     * Show numbered list for user selection
+     */
     std::cout << listDevices(available_receivers);
 
-    // === STEP 3: USER SELECTS TARGET ===
+    /**
+     * STEP 3: USER SELECTION
+     * ======================
+     * Let user choose target receiver
+     */
     size_t selected_device_index;
     std::cout << "Enter device number (0-" << (available_receivers.size() - 1) << "): ";
     std::cin >> selected_device_index;
 
+    // Validate selection
     if (selected_device_index >= available_receivers.size())
     {
         std::cerr << "❌ Invalid selection!" << std::endl;
         return 1;
     }
 
-    // === STEP 4: CONNECT TO SELECTED RECEIVER ===
+    /**
+     * STEP 4: CONNECT TO SELECTED RECEIVER
+     * ====================================
+     * Establish TCP connection for streaming
+     */
     NetworkSocket tcp_connection;
     const DiscoveredDevice &target_receiver = available_receivers[selected_device_index];
 
@@ -295,44 +375,61 @@ int main()
     std::cout << "\n🎬 STREAMING ACTIVE to " << target_receiver.toString()
               << " (Ctrl+C to stop)" << std::endl;
 
-    // === STEP 5: MAIN STREAMING LOOP (10 FPS) ===
+    /**
+     * STEP 5: MAIN STREAMING LOOP
+     * ===========================
+     * Capture and send frames at precise 10 FPS
+     */
     auto previous_frame_time = std::chrono::steady_clock::now();
     int frame_counter = 0;
 
-    while (true)
+    while (true) // Loop until connection lost
     {
-        // Capture current screen frame (~5-10ms)
+        /**
+         * Capture current screen frame
+         * Returns RGB24 pixel data
+         */
         std::vector<uint8_t> screen_frame = captureScreen();
         uint32_t frame_size_bytes = static_cast<uint32_t>(screen_frame.size());
 
-        // Send frame size prefix (4 bytes, network byte order)
-        uint32_t network_frame_size = htonl(frame_size_bytes);
+        /**
+         * Send frame size prefix (4 bytes)
+         * Network byte order ensures compatibility
+         */
+        uint32_t network_frame_size = htonl(frame_size_bytes); // Convert to network order
         if (!tcp_connection.send(&network_frame_size, sizeof(network_frame_size)))
         {
             std::cout << "\n❌ Connection lost - stream ended" << std::endl;
             break;
         }
 
-        // Send raw RGB pixel data (~2.7MB per frame)
+        /**
+         * Send actual pixel data
+         * ~2.76MB per frame at 720p
+         */
         if (!tcp_connection.send(screen_frame.data(), frame_size_bytes))
         {
-            break;
+            break; // Send failed
         }
 
         frame_counter++;
 
-        // === PRECISE FPS LIMITING ===
-        // Sleep until exactly 100ms has passed (10 FPS)
+        /**
+         * Precise FPS limiting
+         * Ensures we don't send faster than TARGET_FPS
+         */
         auto current_time = std::chrono::steady_clock::now();
         auto target_frame_time = previous_frame_time + std::chrono::milliseconds(FRAME_INTERVAL_MS);
 
         if (current_time < target_frame_time)
         {
-            std::this_thread::sleep_until(target_frame_time);
+            std::this_thread::sleep_until(target_frame_time); // Sleep until next frame time
         }
         previous_frame_time = std::chrono::steady_clock::now();
 
-        // Live status update (every 5 seconds)
+        /**
+         * Status update every 50 frames (5 seconds at 10 FPS)
+         */
         if (frame_counter % 50 == 0)
         {
             std::cout << "📊 Sent " << frame_counter << " frames ("
