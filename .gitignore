@@ -2,3 +2,9 @@
 
 receiver
 sender
+
+
+#folders to ignore:
+/build/
+*.0
+*.exe
