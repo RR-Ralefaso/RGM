@@ -1,6 +1,5 @@
 /**
  * DISCOVER.H - SSDP ZERO-CONFIG DISCOVERY API
- * IMPROVED VERSION with better error handling
  */
 #ifndef DISCOVER_H
 #define DISCOVER_H
@@ -8,12 +7,16 @@
 #include <vector>
 #include <string>
 
+// Socket helper functions (declarations only)
+bool initSockets();
+void cleanupSockets();
+
 struct DiscoveredDevice
 {
     std::string ip_address;
     int tcp_port;
     std::string service_uuid;
-    std::string location_url; // Store full URL for debugging
+    std::string location_url;
 
     DiscoveredDevice(const std::string &ip, int port, const std::string &uuid = "")
         : ip_address(ip), tcp_port(port), service_uuid(uuid)
@@ -32,6 +35,6 @@ std::vector<DiscoveredDevice> discoverReceivers(int timeout_seconds = 5);
 bool hasReceivers();
 std::string listDevices(const std::vector<DiscoveredDevice> &devices);
 std::string getLocalIPAddress();
-bool testTcpConnection(const std::string &ip, int port, int timeout_ms = 1000); // NEW: Test connection before returning
+bool testTcpConnection(const std::string &ip, int port, int timeout_ms = 1000);
 
 #endif

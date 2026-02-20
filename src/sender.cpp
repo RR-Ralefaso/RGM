@@ -1,5 +1,5 @@
 /**
- * SENDER.CPP - IMPROVED VERSION with TCP_NODELAY fix
+ * SENDER.CPP - SCREEN CAPTURE AND STREAMING
  */
 #include <iostream>
 #include <cstring>
@@ -14,12 +14,12 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
-#include <mstcpip.h> // For TCP_NODELAY on Windows
+#include <mstcpip.h>
 #pragma comment(lib, "ws2_32.lib")
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
-#include <netinet/tcp.h> // IMPORTANT: For TCP_NODELAY on Linux/Unix
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -36,33 +36,6 @@
 
 // Global flag for running state
 std::atomic<bool> g_running{true};
-
-/**
- * Initialize sockets (Windows only)
- */
-bool initSockets()
-{
-#ifdef _WIN32
-    WSADATA wsa;
-    int result = WSAStartup(MAKEWORD(2, 2), &wsa);
-    if (result != 0)
-    {
-        std::cerr << "❌ WSAStartup failed: " << result << std::endl;
-        return false;
-    }
-#endif
-    return true;
-}
-
-/**
- * Cleanup sockets
- */
-void cleanupSockets()
-{
-#ifdef _WIN32
-    WSACleanup();
-#endif
-}
 
 /**
  * Network socket class with improved error handling
@@ -128,7 +101,6 @@ public:
             return false;
         }
 
-        // Prepare address
         struct sockaddr_in addr;
         memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
@@ -140,7 +112,6 @@ public:
             return false;
         }
 
-        // Set non-blocking for timeout
 #ifdef _WIN32
         u_long mode = 1;
         ioctlsocket(sock, FIONBIO, &mode);
@@ -149,7 +120,6 @@ public:
         fcntl(sock, F_SETFL, flags | O_NONBLOCK);
 #endif
 
-        // Start connection
         int result = ::connect(sock, (struct sockaddr *)&addr, sizeof(addr));
 
         bool connected = false;
@@ -160,7 +130,6 @@ public:
         if (result < 0 && errno == EINPROGRESS)
 #endif
         {
-            // Wait for connection with timeout
             fd_set fdset;
             FD_ZERO(&fdset);
             FD_SET(sock, &fdset);
@@ -180,7 +149,6 @@ public:
             }
         }
 
-        // Set back to blocking mode
 #ifdef _WIN32
         mode = 0;
         ioctlsocket(sock, FIONBIO, &mode);
@@ -195,12 +163,10 @@ public:
             return false;
         }
 
-        // Set TCP_NODELAY to disable Nagle's algorithm (reduces latency)
         int nodelay = 1;
         if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *)&nodelay, sizeof(nodelay)) < 0)
         {
             std::cerr << "⚠️  Warning: Could not set TCP_NODELAY" << std::endl;
-            // Non-fatal error, continue anyway
         }
 
         std::cout << "✅ Connected to " << ip << ":" << port << std::endl;
@@ -270,14 +236,12 @@ std::vector<uint8_t> captureScreen()
 
     SelectObject(mem_dc, bitmap);
 
-    // Capture screen
     BitBlt(mem_dc, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, screen_dc, 0, 0, SRCCOPY);
 
-    // Get bitmap bits
     BITMAPINFOHEADER bi = {0};
     bi.biSize = sizeof(BITMAPINFOHEADER);
     bi.biWidth = SCREEN_WIDTH;
-    bi.biHeight = -SCREEN_HEIGHT; // Negative to flip vertically
+    bi.biHeight = -SCREEN_HEIGHT;
     bi.biPlanes = 1;
     bi.biBitCount = 24;
     bi.biCompression = BI_RGB;
@@ -290,7 +254,6 @@ std::vector<uint8_t> captureScreen()
         std::cerr << "❌ Failed to get bitmap bits" << std::endl;
     }
 
-    // Cleanup
     DeleteObject(bitmap);
     DeleteDC(mem_dc);
     ReleaseDC(NULL, screen_dc);
@@ -305,27 +268,22 @@ std::vector<uint8_t> captureScreen()
 {
     std::vector<uint8_t> pixels(SCREEN_WIDTH * SCREEN_HEIGHT * BYTES_PER_PIXEL, 0);
 
-    // Open display
     Display *display = XOpenDisplay(NULL);
     if (!display)
     {
-        std::cerr << "❌ Failed to open X display. Make sure you're running in a GUI environment." << std::endl;
+        std::cerr << "❌ Failed to open X display" << std::endl;
         return pixels;
     }
 
-    // Get default screen
     int screen_num = DefaultScreen(display);
     Window root = RootWindow(display, screen_num);
 
-    // Get screen dimensions (use actual screen size)
     int actual_width = DisplayWidth(display, screen_num);
     int actual_height = DisplayHeight(display, screen_num);
 
-    // If actual screen is smaller than our target, adjust
     int capture_width = std::min(SCREEN_WIDTH, actual_width);
     int capture_height = std::min(SCREEN_HEIGHT, actual_height);
 
-    // Get screen image
     XImage *image = XGetImage(display, root, 0, 0,
                               capture_width, capture_height,
                               AllPlanes, ZPixmap);
@@ -337,7 +295,6 @@ std::vector<uint8_t> captureScreen()
         return pixels;
     }
 
-    // Convert to RGB24
     for (int y = 0; y < capture_height; y++)
     {
         for (int x = 0; x < capture_width; x++)
@@ -345,10 +302,9 @@ std::vector<uint8_t> captureScreen()
             unsigned long pixel = XGetPixel(image, x, y);
             size_t index = (y * SCREEN_WIDTH + x) * BYTES_PER_PIXEL;
 
-            // Extract RGB components (X11 uses 0xRRGGBB format typically)
-            pixels[index + 0] = (pixel >> 16) & 0xFF; // Red
-            pixels[index + 1] = (pixel >> 8) & 0xFF;  // Green
-            pixels[index + 2] = pixel & 0xFF;         // Blue
+            pixels[index + 0] = (pixel >> 16) & 0xFF;
+            pixels[index + 1] = (pixel >> 8) & 0xFF;
+            pixels[index + 2] = pixel & 0xFF;
         }
     }
 
@@ -384,16 +340,14 @@ int main()
     std::cout << "Target FPS: " << TARGET_FPS << std::endl;
     std::cout << "========================================" << std::endl;
 
-    // Initialize sockets
     if (!initSockets())
     {
         std::cerr << "❌ Failed to initialize sockets" << std::endl;
         return 1;
     }
 
-    // Discover receivers
     std::cout << "🔍 Discovering receivers..." << std::endl;
-    auto receivers = discoverReceivers(5); // 5 second timeout
+    auto receivers = discoverReceivers(5);
 
     if (receivers.empty())
     {
@@ -404,10 +358,8 @@ int main()
         return 1;
     }
 
-    // Display discovered receivers
     std::cout << listDevices(receivers);
 
-    // Let user select a receiver
     size_t choice;
     std::cout << "Select receiver (0-" << receivers.size() - 1 << "): ";
     std::cin >> choice;
@@ -422,7 +374,6 @@ int main()
     const auto &selected = receivers[choice];
     std::cout << "🎯 Selected: " << selected.toString() << std::endl;
 
-    // Connect to receiver
     std::cout << "🔌 Connecting to receiver..." << std::endl;
 
     NetworkSocket connection;
@@ -437,37 +388,20 @@ int main()
     std::cout << "🎬 Starting stream..." << std::endl;
     std::cout << "   Press Ctrl+C to stop" << std::endl;
 
-    // Streaming loop
     auto last_time = std::chrono::steady_clock::now();
     auto stats_time = last_time;
     int frames_sent = 0;
     size_t total_bytes = 0;
     bool streaming = true;
 
-    // Frame timing for constant FPS
     const auto frame_duration = std::chrono::milliseconds(1000 / TARGET_FPS);
 
     while (streaming && g_running)
     {
         auto frame_start = std::chrono::steady_clock::now();
 
-        // Capture screen
         auto frame = captureScreen();
 
-        // Check if capture was successful (non-zero pixels)
-        bool capture_valid = false;
-        for (size_t i = 0; i < frame.size() && !capture_valid; i += 1000)
-        {
-            if (frame[i] != 0)
-                capture_valid = true;
-        }
-
-        if (!capture_valid)
-        {
-            std::cerr << "⚠️  Screen capture may be invalid (all zeros)" << std::endl;
-        }
-
-        // Send frame size (network byte order)
         uint32_t frame_size = frame.size();
         uint32_t net_frame_size = htonl(frame_size);
 
@@ -477,7 +411,6 @@ int main()
             break;
         }
 
-        // Send frame data
         if (!connection.sendAll(frame.data(), frame.size()))
         {
             std::cerr << "❌ Failed to send frame data" << std::endl;
@@ -487,7 +420,6 @@ int main()
         frames_sent++;
         total_bytes += 4 + frame_size;
 
-        // Show stats every 5 seconds
         auto now = std::chrono::steady_clock::now();
         auto stats_elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                                  now - stats_time)
@@ -499,7 +431,6 @@ int main()
             stats_time = now;
         }
 
-        // Maintain constant FPS
         auto frame_end = std::chrono::steady_clock::now();
         auto frame_time = frame_end - frame_start;
 
@@ -509,7 +440,6 @@ int main()
         }
     }
 
-    // Final stats
     auto end_time = std::chrono::steady_clock::now();
     auto total_seconds = std::chrono::duration_cast<std::chrono::seconds>(
                              end_time - last_time)
