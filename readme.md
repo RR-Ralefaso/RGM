@@ -194,20 +194,7 @@ make all
 - For best results, use a wired Ethernet connection
 - Reduce resolution or FPS in the source code if needed
 
-
-# PROJECT STRUCTURE :
-
-
-rgm/
-├── src/
-│   ├── sender.cpp      # Screen capture and streaming
-│   ├── receiver.cpp    # Video display and SSDP advertising
-│   ├── discover.cpp    # SSDP discovery implementation
-│   └── discover.h      # Discovery API
-├── Makefile            # Platform-aware build system
-├──  - - - 
-└── assets/
-    └── icons/          # Project icons
+---
 
 <p align="center">
   <img src="assets/icons/rcorp.jpeg" width="50" alt="R-Corp Logo">
