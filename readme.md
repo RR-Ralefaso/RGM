@@ -209,3 +209,9 @@ rgm/
 └── assets/
     └── icons/          # Project icons
 
+<p align="center">
+  <img src="assets/icons/rcorp.jpeg" width="50" alt="R-Corp Logo">
+  <br>
+  <b>ROOT ACCESS FOR EVERYONE</b>
+  
+</p>
