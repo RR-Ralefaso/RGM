@@ -1,6 +1,5 @@
 /**
- * SENDER.CPP - IMPROVED VERSION
- * Better connection handling, error checking, and user feedback
+ * SENDER.CPP - IMPROVED VERSION with TCP_NODELAY fix
  */
 #include <iostream>
 #include <cstring>
@@ -15,13 +14,16 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <mstcpip.h> // For TCP_NODELAY on Windows
 #pragma comment(lib, "ws2_32.lib")
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h> // IMPORTANT: For TCP_NODELAY on Linux/Unix
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #endif
@@ -195,7 +197,11 @@ public:
 
         // Set TCP_NODELAY to disable Nagle's algorithm (reduces latency)
         int nodelay = 1;
-        setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *)&nodelay, sizeof(nodelay));
+        if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *)&nodelay, sizeof(nodelay)) < 0)
+        {
+            std::cerr << "⚠️  Warning: Could not set TCP_NODELAY" << std::endl;
+            // Non-fatal error, continue anyway
+        }
 
         std::cout << "✅ Connected to " << ip << ":" << port << std::endl;
         return true;
@@ -299,18 +305,29 @@ std::vector<uint8_t> captureScreen()
 {
     std::vector<uint8_t> pixels(SCREEN_WIDTH * SCREEN_HEIGHT * BYTES_PER_PIXEL, 0);
 
+    // Open display
     Display *display = XOpenDisplay(NULL);
     if (!display)
     {
-        std::cerr << "❌ Failed to open X display" << std::endl;
+        std::cerr << "❌ Failed to open X display. Make sure you're running in a GUI environment." << std::endl;
         return pixels;
     }
 
-    Window root = DefaultRootWindow(display);
+    // Get default screen
+    int screen_num = DefaultScreen(display);
+    Window root = RootWindow(display, screen_num);
+
+    // Get screen dimensions (use actual screen size)
+    int actual_width = DisplayWidth(display, screen_num);
+    int actual_height = DisplayHeight(display, screen_num);
+
+    // If actual screen is smaller than our target, adjust
+    int capture_width = std::min(SCREEN_WIDTH, actual_width);
+    int capture_height = std::min(SCREEN_HEIGHT, actual_height);
 
     // Get screen image
     XImage *image = XGetImage(display, root, 0, 0,
-                              SCREEN_WIDTH, SCREEN_HEIGHT,
+                              capture_width, capture_height,
                               AllPlanes, ZPixmap);
 
     if (!image)
@@ -321,15 +338,14 @@ std::vector<uint8_t> captureScreen()
     }
 
     // Convert to RGB24
-    for (int y = 0; y < SCREEN_HEIGHT; y++)
+    for (int y = 0; y < capture_height; y++)
     {
-        for (int x = 0; x < SCREEN_WIDTH; x++)
+        for (int x = 0; x < capture_width; x++)
         {
             unsigned long pixel = XGetPixel(image, x, y);
             size_t index = (y * SCREEN_WIDTH + x) * BYTES_PER_PIXEL;
 
-            // X11 default is usually BGR or RGB depending on endianness
-            // This assumes standard RGB order
+            // Extract RGB components (X11 uses 0xRRGGBB format typically)
             pixels[index + 0] = (pixel >> 16) & 0xFF; // Red
             pixels[index + 1] = (pixel >> 8) & 0xFF;  // Green
             pixels[index + 2] = pixel & 0xFF;         // Blue
@@ -383,6 +399,7 @@ int main()
     {
         std::cerr << "❌ No receivers found!" << std::endl;
         std::cerr << "   Make sure receiver is running on the same network." << std::endl;
+        std::cerr << "   Check firewall settings (UDP 1900, TCP 8081)." << std::endl;
         cleanupSockets();
         return 1;
     }
@@ -412,7 +429,7 @@ int main()
     if (!connection.connect(selected.ip_address, selected.tcp_port))
     {
         std::cerr << "❌ Failed to connect to receiver" << std::endl;
-        std::cerr << "   Check if receiver is running and firewall is configured." << std::endl;
+        std::cerr << "   Check if receiver is running and firewall allows TCP port 8081." << std::endl;
         cleanupSockets();
         return 1;
     }
