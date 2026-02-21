@@ -26,9 +26,9 @@
 #endif
 
 #define TCP_STREAM_PORT 8081
-#define SCREEN_WIDTH 1280
-#define SCREEN_HEIGHT 720
-#define BYTES_PER_PIXEL 3
+#define SCREEN_WIDTH 1920   //was 1280 now 1920
+#define SCREEN_HEIGHT 1080 //was 720 now 1080
+#define BYTES_PER_PIXEL 3 
 #define SSDP_ADDRESS "239.255.255.250"
 #define SSDP_PORT 1900
 

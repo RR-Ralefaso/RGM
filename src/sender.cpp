@@ -28,9 +28,9 @@
 #include <X11/Xutil.h>
 #endif
 
-#define SCREEN_WIDTH 1280
-#define SCREEN_HEIGHT 720
-#define TARGET_FPS 10
+#define SCREEN_WIDTH 1920 // was 1280 now
+#define SCREEN_HEIGHT 1080 //was 720 now 1080
+#define TARGET_FPS 30 //was 10 now 30
 #define BYTES_PER_PIXEL 3
 #define CONNECTION_TIMEOUT_MS 5000
 
@@ -394,7 +394,7 @@ int main()
     size_t total_bytes = 0;
     bool streaming = true;
 
-    const auto frame_duration = std::chrono::milliseconds(1000 / TARGET_FPS);
+    const auto frame_duration = std::chrono::milliseconds(3000 / TARGET_FPS); // was 1000/Target_fps
 
     while (streaming && g_running)
     {
