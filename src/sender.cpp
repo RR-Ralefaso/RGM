@@ -28,9 +28,9 @@
 #include <X11/Xutil.h>
 #endif
 
-#define SCREEN_WIDTH 1920 //CHANCED
-#define SCREEN_HEIGHT 1080 //CHANGED
-#define TARGET_FPS 10 
+#define SCREEN_WIDTH 1280
+#define SCREEN_HEIGHT 720
+#define TARGET_FPS 10
 #define BYTES_PER_PIXEL 3
 #define CONNECTION_TIMEOUT_MS 5000
 
