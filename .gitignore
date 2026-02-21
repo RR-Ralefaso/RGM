@@ -2,7 +2,7 @@
 
 receiver
 sender
-
+*.txt
 
 #folders to ignore:
 /build/
