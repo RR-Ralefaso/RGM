@@ -1,4 +1,4 @@
-# RGM - Remote Screen Sharing
+# RGM
 
 <div align="center">
 
