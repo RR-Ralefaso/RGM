@@ -94,8 +94,7 @@ void showSplashScreen()
     // Try to load RGM.png from various possible locations
     SDL_Surface *image = nullptr;
     const char *possiblePaths[] = {
-        "assets/icons/RGM.png",
-        "../assets/icons/RGM.png",
+        "../assets/icons/rcorp.jpeg",
         "./assets/icons/RGM.png",
         "/usr/share/rgm/icons/RGM.png",
         nullptr};

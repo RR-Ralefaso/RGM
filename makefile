@@ -123,7 +123,7 @@ clean:
 run: app
 	@if [ -f ./app ]; then \
 		echo "========================================="; \
-		echo "🎬 RGM SCREEN SHARE LAUNCHER"; \
+		echo "🎬 RGM  LAUNCHER"; \
 		echo "========================================="; \
 		./app; \
 	else \
