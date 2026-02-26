@@ -187,10 +187,10 @@ check:
 		fi \
 	done
 	@echo "========================================="
-	@if [ -f assets/icons/RGM.png ]; then \
-		echo "✅ RGM.png found in assets/icons/"; \
+	@if [ -f assets/icons/rcorp.jpeg ]; then \
+		echo "✅ rcorp.jpeg found in assets/icons/"; \
 	else \
-		echo "⚠️  RGM.png not found (optional)"; \
+		echo "⚠️  rcorp.jpeg not found (optional)"; \
 	fi
 	@echo "========================================="
 
