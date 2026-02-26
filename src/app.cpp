@@ -172,7 +172,7 @@ int showMenu()
 
         std::cout << COLOR_CYAN << COLOR_BOLD;
         std::cout << "╔═══════════════════════════════════════╗\n";
-        std::cout << "║        RGM SCREEN SHARE v" << VERSION << "         ║\n";
+        std::cout << "║             RGM  v" << VERSION << "   ║\n";
         std::cout << "╠═══════════════════════════════════════╣\n";
         std::cout << "║                                       ║\n";
         std::cout << "║  " << COLOR_GREEN << "1. 🎥 SEND SCREEN" << COLOR_CYAN << "                 ║\n";
