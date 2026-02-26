@@ -27,7 +27,7 @@ Your support helps maintain and improve RGM for everyone.
 - [Troubleshooting](#troubleshooting)
 - [Roadmap](#roadmap)
 - [Support the Project](#support-the-project)
-- [License](#license)
+
 
 ---
 
@@ -714,13 +714,6 @@ Your support enables:
 
 ---
 
-## License
-
-Copyright © 2024 RR-Ralefaso (polaris)
-
-This project is open source software. All rights reserved.
-
----
 
 <div align="center">
 
