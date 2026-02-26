@@ -49,7 +49,7 @@ void showSplashScreen()
 {
     std::cout << COLOR_CYAN << COLOR_BOLD;
     std::cout << "========================================\n";
-    std::cout << "    RGM SCREEN SHARE LAUNCHER v" << VERSION << "\n";
+    std::cout << "    RGM LAUNCHER v" << VERSION << "\n";
     std::cout << "========================================\n"
               << COLOR_RESET;
 
