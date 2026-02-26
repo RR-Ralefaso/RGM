@@ -379,8 +379,8 @@ Special thanks to:
 
 ```
       ╔══════════════════════════════════════╗
-      ║  Thank you for using RGM Screen Share!  ║
-      ║     Share your screen, simply.          ║
+      ║  Thank you for using RGM             ║
+      ║     Share your screen, simply.       ║
       ╚══════════════════════════════════════╝
 ```
 
