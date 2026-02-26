@@ -97,8 +97,6 @@ void showSplashScreen()
         "assets/icons/RGM.png",
         "../assets/icons/RGM.png",
         "./assets/icons/RGM.png",
-        "/usr/share/rgm/icons/RGM.png",
-        "RGM.png",
         nullptr};
 
     for (int i = 0; possiblePaths[i] != nullptr && !image; i++)
