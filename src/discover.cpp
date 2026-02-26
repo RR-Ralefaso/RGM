@@ -28,6 +28,7 @@
 
 static const char *SSDP_MULTICAST_GROUP = "239.255.255.250";
 static const int SSDP_MULTICAST_PORT = 1900;
+static const int SOCKET_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB socket buffer
 
 /**
  * Initialize sockets (Windows only)
@@ -271,6 +272,10 @@ std::vector<DiscoveredDevice> discoverReceivers(int timeout_seconds)
 
     int reuse = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(reuse));
+
+    // Set socket buffer size
+    int sock_buf_size = SOCKET_BUFFER_SIZE;
+    setsockopt(sock, SOL_SOCKET, SO_RCVBUF, (char *)&sock_buf_size, sizeof(sock_buf_size));
 
     struct ip_mreq mreq;
     mreq.imr_multiaddr.s_addr = inet_addr(SSDP_MULTICAST_GROUP);
