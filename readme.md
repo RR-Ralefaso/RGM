@@ -1,5 +1,22 @@
-
+```markdown
 # RGM - README
+
+<div align="center">
+  
+  # ⭐ Support RGM Development ⭐
+  
+  If you find this project useful, please consider:
+  
+  [![GitHub stars](https://img.shields.io/github/stars/RR-Ralefaso/RGM?style=social)](https://github.com/RR-Ralefaso/RGM/stargazers)
+  [![Sponsor](https://img.shields.io/badge/sponsor-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#white)](https://github.com/sponsors/RR-Ralefaso)
+  
+  ### ⭐ [Star this project on GitHub](https://github.com/RR-Ralefaso/RGM) | 💖 [Become a Sponsor](https://github.com/sponsors/RR-Ralefaso)
+  
+  Your support helps maintain and improve RGM for everyone!
+  
+</div>
+
+---
 
 A zero-configuration screen sharing application that allows you to share your 
 screen across a network with minimal setup. Uses SSDP for automatic discovery.
@@ -28,7 +45,7 @@ screen across a network with minimal setup. Uses SSDP for automatic discovery.
 ## 1. FEATURES
 
 - ✓ **Zero Configuration** - Automatic discovery via SSDP (no IP addresses needed)
-- ✓ **Cross-Platform** - Works on Linux, with Windows support planned
+- ✓ **Cross-Platform** - Works on Linux, Windows, and macOS
 - ✓ **High Performance** - 60 FPS streaming with minimal latency
 - ✓ **Auto Resolution Detection** - Automatically detects and adapts to screen size
 - ✓ **Splash Screen** - Professional startup with RGM logo
@@ -48,7 +65,17 @@ screen across a network with minimal setup. Uses SSDP for automatic discovery.
 - **Network:** 100Mbps Ethernet or good WiFi (1Gbps recommended for 60 FPS)
 - **Display:** Any resolution supported (tested up to 4K)
 
-### Software (Linux)
+### Software
+
+<div align="center">
+
+| **Linux** | **Windows** | **macOS** |
+|:---------:|:-----------:|:---------:|
+| ✅ Full Support | ✅ Full Support | ✅ Full Support |
+
+</div>
+
+#### Linux Requirements
 - **Operating System:** Linux (Ubuntu/Debian, Fedora, Arch, etc.)
 - **Compiler:** g++ 4.8+ with C++11 support
 - **Libraries:**
@@ -56,6 +83,20 @@ screen across a network with minimal setup. Uses SSDP for automatic discovery.
   - libsdl2-dev (SDL2 for graphics)
   - make (build tool)
   - pthread (threading support)
+
+#### Windows Requirements
+- **Operating System:** Windows 10/11
+- **Compiler:** MinGW-w64 or MSVC
+- **Libraries:**
+  - SDL2 development libraries
+  - Windows SDK
+
+#### macOS Requirements
+- **Operating System:** macOS 10.15+
+- **Compiler:** Clang with C++11 support
+- **Libraries:**
+  - SDL2 via Homebrew
+  - XQuartz (optional)
 
 ---
 
@@ -79,7 +120,33 @@ make
 ./app
 ```
 
-### B. Other Distributions
+### B. Windows Installation
+
+1. Install MinGW-w64 or Visual Studio
+2. Download SDL2 development libraries
+3. Open Command Prompt in source directory
+4. Run:
+
+```bash
+mingw32-make
+./app.exe
+```
+
+### C. macOS Installation
+
+```bash
+# Install Homebrew if not present
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install dependencies
+brew install sdl2 make
+
+# Build
+make
+./app
+```
+
+### D. Other Distributions
 
 **Fedora/RHEL/CentOS:**
 
@@ -145,9 +212,9 @@ make check
 
 After successful build, you'll have these executables:
 
-- `app`       - Launcher application (menu-driven)
-- `sender`    - Screen sender (streams your screen)
-- `receiver`  - Screen receiver (displays received stream)
+- `app` (or `app.exe` on Windows) - Launcher application (menu-driven)
+- `sender` (or `sender.exe`) - Screen sender (streams your screen)
+- `receiver` (or `receiver.exe`) - Screen receiver (displays received stream)
 
 ---
 
@@ -187,7 +254,7 @@ The launcher provides a menu:
 
 ```
 ╔═══════════════════════════════════════╗
-║        RGM SCREEN SHARE v2.0          ║
+║              RGM v2.0                 ║
 ╠═══════════════════════════════════════╣
 ║                                       ║
 ║  1. 🎥 SEND SCREEN                    ║
@@ -247,11 +314,10 @@ This shows how to run sender and receiver in separate terminals.
 | Problem | Solution |
 |---------|----------|
 | **"No receivers found!"** | ✓ Ensure receiver is running on another machine<br>✓ Check firewall settings (UDP 1900, TCP 8081)<br>✓ Verify both machines are on the same network<br>✓ Try disabling firewall temporarily for testing<br>✓ Run `make check` to verify build environment |
-| **"Connection refused" or timeout** | ✓ Verify receiver is running (`ps aux \| grep receiver`)<br>✓ Check if port 8081 is open: `netstat -tulpn \| grep 8081`<br>✓ Try telnet: `telnet <receiver-ip> 8081`<br>✓ Check for other applications using port 8081 |
+| **"Connection refused" or timeout** | ✓ Verify receiver is running (`ps aux \| grep receiver` on Linux/macOS, Task Manager on Windows)<br>✓ Check if port 8081 is open<br>✓ Try telnet: `telnet <receiver-ip> 8081`<br>✓ Check for other applications using port 8081 |
 | **Poor performance or low FPS** | ✓ Check network speed (1Gbps recommended for 60 FPS)<br>✓ Reduce screen resolution if necessary<br>✓ Close bandwidth-heavy applications<br>✓ Use wired Ethernet instead of WiFi<br>✓ Check CPU usage on both machines |
 | **Build fails with "missing separator"** | ✓ Ensure Makefile uses tabs, not spaces, for indentation<br>✓ Run `make clean` before rebuilding |
-| **SDL2 not found during build** | ✓ Install SDL2: `sudo apt-get install libsdl2-dev`<br>✓ On Fedora: `sudo yum install SDL2-devel`<br>✓ On Arch: `sudo pacman -S sdl2` |
-| **X11 errors on Linux** | ✓ Install X11 dev: `sudo apt-get install libx11-dev`<br>✓ Ensure you're running in a graphical environment<br>✓ Check DISPLAY variable: `echo $DISPLAY` |
+| **SDL2 not found during build** | ✓ Install SDL2 development libraries for your platform |
 
 ---
 
@@ -281,6 +347,19 @@ sudo iptables -A OUTPUT -p tcp --sport 8081 -j ACCEPT
 ```bash
 sudo ufw allow 1900/udp
 sudo ufw allow 8081/tcp
+```
+
+**For Windows Defender Firewall:**
+
+```powershell
+New-NetFirewallRule -DisplayName "RGM Discovery" -Direction Inbound -Protocol UDP -LocalPort 1900 -Action Allow
+New-NetFirewallRule -DisplayName "RGM Stream" -Direction Inbound -Protocol TCP -LocalPort 8081 -Action Allow
+```
+
+**For macOS:**
+
+```bash
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /path/to/receiver
 ```
 
 ### Network Topology
@@ -330,6 +409,23 @@ The codebase is designed with future enhancements in mind:
 
 **RGM** is created and maintained by **[RR-Ralefaso (polaris)](https://github.com/RR-Ralefaso)** - an experienced Software Developer, Systems Analyst, and aspiring researcher focused on Applied Mathematics and Computer Science.
 
+<div align="center">
+  
+### 💖 Support the Developer 💖
+  
+  [![GitHub Sponsors](https://img.shields.io/badge/Sponsor%20on%20GitHub-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#white)](https://github.com/sponsors/RR-Ralefaso)
+  
+  Your sponsorship helps dedicate more time to:
+
+- ✨ Adding new features
+- 🐛 Fixing bugs quickly
+- 📚 Improving documentation
+- 🌍 Supporting more platforms
+  
+  **Every star and sponsor makes a difference!** ⭐
+  
+</div>
+
 - **GitHub:** [@RR-Ralefaso](https://github.com/RR-Ralefaso)
 - **Areas of Expertise:** Backend systems, AI/ML, Computer Vision, Systems Programming
 - **Technical Stack:** C++, Python, Rust, Go, Java, and more
@@ -341,6 +437,7 @@ The codebase is designed with future enhancements in mind:
 - Cross-platform socket handling
 - SDL2 integration for display
 - Performance optimizations
+- Windows and macOS compatibility
 
 ### Acknowledgments
 
@@ -350,6 +447,7 @@ Special thanks to:
 - SDL2 development team
 - X11 and network programming communities
 - All contributors and users
+- **GitHub Sponsors** who make continued development possible
 
 ### Version History
 
@@ -366,17 +464,13 @@ For issues, questions, or contributions:
 - Verify network and firewall settings
 - Ensure all dependencies are installed
 - Run `make check` for environment diagnostics
-
-### Acknowledgments
-
-Special thanks to:
-
-- The SDL2 development team
-- X11 and network programming communities
-- Open-source contributors
+- [Open an issue](https://github.com/RR-Ralefaso/RGM/issues)
+- [Become a sponsor](https://github.com/sponsors/RR-Ralefaso)
 
 ---
 
+<div align="center">
+  
 ```
       ╔══════════════════════════════════════╗
       ║  Thank you for using RGM             ║
@@ -384,18 +478,22 @@ Special thanks to:
       ╚══════════════════════════════════════╝
 ```
 
+---
+
+  <img src="assets/icons/rcorp.jpeg" alt="R-Corp Logo" width="100"/>
+  <p><strong>Created by RR-Ralefaso (polaris)</strong></p>
+  <p>ROOT ACCESS FOR EVERYONE</p>
 
 ---
 
-<div align="center">
-  <img src="assets/icons/rcorp.jpeg" alt="R-Corp Logo" width="100"/>
-  <p><strong>Created by RR-Ralefaso (polaris)</strong></p>
-  <p> ROOT ACCESS FOR EVERYONE </p>
+  ⭐ **Like this project?** [Star it on GitHub](https://github.com/RR-Ralefaso/RGM)  
+  💖 **Love it?** [Become a sponsor](https://github.com/sponsors/RR-Ralefaso)
+
+---
+
 </div>
 
-
 ```
-
 ╔════════════════════════════════════════════════════════════════════════════╗
 ║                                                                            ║
 ║   "Seeking to solve complex business problems through analytical          ║
@@ -406,5 +504,17 @@ Special thanks to:
 ╚════════════════════════════════════════════════════════════════════════════╝
 
 🌐 **Linux** • **Windows 10/11** • **macOS** - One codebase, all platforms.
+```
 
+<div align="center">
+  
+### 📊 Project Stats
+  
+  [![GitHub stars](https://img.shields.io/github/stars/RR-Ralefaso/RGM?style=social)](https://github.com/RR-Ralefaso/RGM/stargazers)
+  [![GitHub forks](https://img.shields.io/github/forks/RR-Ralefaso/RGM?style=social)](https://github.com/RR-Ralefaso/RGM/network/members)
+  [![GitHub sponsors](https://img.shields.io/github/sponsors/RR-Ralefaso?style=social)](https://github.com/sponsors/RR-Ralefaso)
+  
+  **Your support means the world!** 🌍
+
+</div>
 ```
