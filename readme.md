@@ -384,4 +384,13 @@ Special thanks to:
       ╚══════════════════════════════════════╝
 ```
 
+
+---
+
+<div align="center">
+  <img src="assets/icons/rcorp.jpeg" alt="R-Corp Logo" width="100"/>
+  <p><strong>Created by RR-Ralefaso (polaris)</strong></p>
+  <p> ROOT ACCESS FOR EVERYONE </p>
+</div>
+
 ```
