@@ -2,6 +2,7 @@
 
 receiver
 sender
+app
 *.txt
 
 #folders to ignore:
