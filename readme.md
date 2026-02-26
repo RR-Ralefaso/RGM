@@ -1,116 +1,416 @@
-```markdown
-# RGM - README
+# RGM - Remote Screen Sharing
 
 <div align="center">
-  
-  # ⭐ Support RGM Development ⭐
-  
-  If you find this project useful, please consider:
-  
-  [![GitHub stars](https://img.shields.io/github/stars/RR-Ralefaso/RGM?style=social)](https://github.com/RR-Ralefaso/RGM/stargazers)
-  [![Sponsor](https://img.shields.io/badge/sponsor-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#white)](https://github.com/sponsors/RR-Ralefaso)
-  
-  ### ⭐ [Star this project on GitHub](https://github.com/RR-Ralefaso/RGM) | 💖 [Become a Sponsor](https://github.com/sponsors/RR-Ralefaso)
-  
-  Your support helps maintain and improve RGM for everyone!
-  
+
+**A zero-configuration screen sharing application with automatic network discovery**
+
+[Star this Project](https://github.com/RR-Ralefaso/RGM) • [Become a Sponsor](https://github.com/sponsors/RR-Ralefaso) • [Report Issue](https://github.com/RR-Ralefaso/RGM/issues)
+
+Your support helps maintain and improve RGM for everyone.
+
 </div>
 
 ---
 
-A zero-configuration screen sharing application that allows you to share your 
-screen across a network with minimal setup. Uses SSDP for automatic discovery.
+## Table of Contents
+
+- [Overview](#overview)
+- [Features](#features)
+- [Architecture](#architecture)
+- [How It Works](#how-it-works)
+- [System Requirements](#system-requirements)
+- [Installation](#installation)
+- [Building from Source](#building-from-source)
+- [Usage Guide](#usage-guide)
+- [Network Configuration](#network-configuration)
+- [Performance Characteristics](#performance-characteristics)
+- [Troubleshooting](#troubleshooting)
+- [Roadmap](#roadmap)
+- [Support the Project](#support-the-project)
+- [License](#license)
+
+---
+
+## Overview
+
+RGM is a lightweight, cross-platform screen sharing solution that eliminates complex network configuration. It implements SSDP (Simple Service Discovery Protocol) to automatically detect receiving hosts on your local network, enabling seamless screen streaming with minimal latency and high frame rates.
+
+The application is designed for professionals who need to share screens across multiple machines without the overhead of configuring IP addresses, firewall rules, or connection parameters.
+
+---
+
+## Features
+
+| Category | Capability |
+|----------|------------|
+| **Discovery** | Zero-configuration SSDP automatic detection |
+| **Performance** | 60 FPS streaming, 4MB socket buffers, TCP_NODELAY optimization |
+| **Platform Support** | Linux, Windows 10/11, macOS 10.15+ |
+| **Display Handling** | Auto-resolution detection, resizable window, aspect ratio preservation |
+| **Monitoring** | Real-time FPS counter, bandwidth utilization display |
+| **User Interface** | Splash screen, menu-driven launcher, direct executable mode |
+
+---
+
+## Architecture
+
+### Component Structure
 
 ```
-
-╔════════════════════════════════════════════════════════════════════════════╗
-║                            TABLE OF CONTENTS                               ║
-╠════════════════════════════════════════════════════════════════════════════╣
-║ 1. FEATURES                                                                ║
-║ 2. SYSTEM REQUIREMENTS                                                     ║
-║ 3. INSTALLATION                                                            ║
-║ 4. BUILDING FROM SOURCE                                                    ║
-║ 5. USAGE GUIDE                                                             ║
-║ 6. COMMAND LINE REFERENCE                                                  ║
-║ 7. TROUBLESHOOTING                                                         ║
-║ 8. NETWORK REQUIREMENTS                                                    ║
-║ 9. FUTURE UPGRADE POINTS                                                   ║
-║ 10. LICENSE & CREDITS                                                      ║
-╚════════════════════════════════════════════════════════════════════════════╝
-
+RGM/
+├── makefile                 # Build configuration
+├── src/                     # Source code
+│   ├── app.cpp             # Launcher application with menu interface
+│   ├── sender.cpp          # Screen capture and transmission
+│   ├── receiver.cpp        # Display and rendering
+│   ├── discover.cpp        # SSDP protocol implementation
+│   └── discover.h          # Discovery API definitions
+├── assets/                  # Resources
+│   └── icons/              # Application icons
+│       ├── rcorp.jpeg      # Corporate logo
+│       └── RGM.png         # Application logo
+├── build/                   # Compiled objects
+│   ├── app.o
+│   ├── discover.o
+│   ├── receiver.o
+│   └── sender.o
+├── app                      # Launcher executable
+├── sender                   # Sender executable
+├── receiver                 # Receiver executable
+└── readme.md                # Documentation
 ```
 
----
+### Application Components
 
-## 1. FEATURES
-
-- ✓ **Zero Configuration** - Automatic discovery via SSDP (no IP addresses needed)
-- ✓ **Cross-Platform** - Works on Linux, Windows, and macOS
-- ✓ **High Performance** - 60 FPS streaming with minimal latency
-- ✓ **Auto Resolution Detection** - Automatically detects and adapts to screen size
-- ✓ **Splash Screen** - Professional startup with RGM logo
-- ✓ **Statistics Display** - Real-time FPS and bandwidth monitoring
-- ✓ **Multiple Modes** - Launcher app with menu, or direct sender/receiver execution
-- ✓ **Resizable Window** - Receiver window can be scaled while maintaining aspect ratio
-- ✓ **TCP Optimization** - Disabled Nagle's algorithm for reduced latency
-- ✓ **Large Buffers** - 4MB socket buffers for smooth high-FPS streaming
+| Executable | Description | Primary Function |
+|------------|-------------|------------------|
+| `app` | Launcher | Menu-driven interface for selecting send/receive mode |
+| `sender` | Screen Sender | Captures display and streams to receiver |
+| `receiver` | Screen Receiver | Displays incoming stream with hardware acceleration |
 
 ---
 
-## 2. SYSTEM REQUIREMENTS
+## How It Works
 
-### Hardware
-- **CPU:** Any modern processor (1GHz+ recommended)
-- **RAM:** 256MB minimum, 512MB recommended
-- **Network:** 100Mbps Ethernet or good WiFi (1Gbps recommended for 60 FPS)
-- **Display:** Any resolution supported (tested up to 4K)
+### Discovery Protocol (SSDP)
 
-### Software
+RGM implements the Simple Service Discovery Protocol (SSDP) to eliminate manual IP configuration. SSDP is the same discovery protocol used by Universal Plug and Play (UPnP) devices.
 
-<div align="center">
+#### Step-by-Step Discovery Process
 
-| **Linux** | **Windows** | **macOS** |
-|:---------:|:-----------:|:---------:|
-| ✅ Full Support | ✅ Full Support | ✅ Full Support |
+**1. Receiver Initialization**
 
-</div>
+```
+[Receiver] → Joins multicast group 239.255.255.250:1900
+           → Listens for M-SEARCH requests
+           → Ready to respond to discovery queries
+```
 
-#### Linux Requirements
-- **Operating System:** Linux (Ubuntu/Debian, Fedora, Arch, etc.)
-- **Compiler:** g++ 4.8+ with C++11 support
-- **Libraries:**
-  - libX11-dev (X11 development libraries)
-  - libsdl2-dev (SDL2 for graphics)
-  - make (build tool)
-  - pthread (threading support)
+When a receiver starts, it performs the following network operations:
 
-#### Windows Requirements
-- **Operating System:** Windows 10/11
-- **Compiler:** MinGW-w64 or MSVC
-- **Libraries:**
-  - SDL2 development libraries
-  - Windows SDK
+- Creates a UDP socket bound to port 1900
+- Joins the multicast group 239.255.255.250 using IP_ADD_MEMBERSHIP
+- Listens for incoming SSDP messages
+- Prepares device description responses
 
-#### macOS Requirements
-- **Operating System:** macOS 10.15+
-- **Compiler:** Clang with C++11 support
-- **Libraries:**
-  - SDL2 via Homebrew
-  - XQuartz (optional)
+**2. Sender Discovery Broadcast**
+
+```
+[Sender] → Broadcasts M-SEARCH * HTTP/1.1
+         → To multicast address 239.255.255.250:1900
+         → With MAN: "ssdp:discover" header
+         → Every 5 seconds
+```
+
+The sender constructs an SSDP search request:
+
+```
+M-SEARCH * HTTP/1.1
+HOST: 239.255.255.250:1900
+MAN: "ssdp:discover"
+MX: 3
+ST: rgm:screenreceiver
+USER-AGENT: RGM/2.0
+```
+
+**3. Receiver Response**
+
+```
+[Receiver] → Sends HTTP/1.1 200 OK
+           → Includes device UUID
+           → Provides IP address and port
+           → Describes capabilities
+```
+
+Each receiver responds with:
+
+```
+HTTP/1.1 200 OK
+CACHE-CONTROL: max-age=1800
+LOCATION: http://192.168.1.102:8081/description.xml
+SERVER: RGM/2.0
+ST: rgm:screenreceiver
+USN: uuid:RGM-12345678-1234-1234-1234-123456789012
+```
+
+**4. Connection Establishment**
+
+```
+[Sender]   → Selects receiver from list
+           → Initiates TCP handshake on port 8081
+           → Negotiates streaming parameters
+[Receiver] → Accepts connection
+           → Prepares display buffer
+           → Acknowledges ready state
+```
+
+### Streaming Architecture
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│                 │     │                  │     │                 │     │                 │
+│  Screen Capture │────▶│   4MB Socket     │────▶│  TCP Stream     │────▶│  SDL2 Renderer  │
+│                 │     │    Buffer        │     │  (Port 8081)    │     │                 │
+│                 │     │                  │     │                 │     │                 │
+└────────┬────────┘     └────────┬─────────┘     └────────┬────────┘     └────────┬────────┘
+         │                       │                        │                       │
+         ▼                       ▼                        ▼                       ▼
+   ┌─────────────┐         ┌─────────────┐          ┌─────────────┐         ┌─────────────┐
+   │   X11       │         │  Overflow   │          │  Nagle's    │         │  Hardware   │
+   │   Win32     │         │  Protection │          │  Disabled   │         │  Acceleration│
+   │   CoreGr.   │         │             │          │  TCP_NODELAY│         │             │
+   └─────────────┘         └─────────────┘          └─────────────┘         └─────────────┘
+```
+
+### Data Flow Pipeline
+
+#### 1. Screen Capture Layer
+
+**Linux (X11)**
+
+```cpp
+// Pseudocode for X11 capture
+Display* display = XOpenDisplay(NULL);
+Window root = DefaultRootWindow(display);
+XImage* image = XGetImage(display, root, 0, 0, 
+                          width, height, AllPlanes, ZPixmap);
+// Extract raw RGB data from image->data
+```
+
+**Windows (GDI/DirectX)**
+
+```cpp
+// Pseudocode for Windows capture
+HDC hdcScreen = GetDC(NULL);
+HDC hdcMem = CreateCompatibleDC(hdcScreen);
+HBITMAP hBitmap = CreateCompatibleBitmap(hdcScreen, width, height);
+SelectObject(hdcMem, hBitmap);
+BitBlt(hdcMem, 0, 0, width, height, hdcScreen, 0, 0, SRCCOPY);
+// Extract bitmap bits
+```
+
+**macOS (CoreGraphics)**
+
+```cpp
+// Pseudocode for macOS capture
+CGImageRef image = CGDisplayCreateImage(displayID);
+CFDataRef data = CGDataProviderCopyData(CGImageGetDataProvider(image));
+// Extract raw pixel data from CFDataRef
+```
+
+#### 2. Buffer Management
+
+The application uses 4MB socket buffers to ensure smooth streaming:
+
+```cpp
+// Socket buffer configuration
+int send_buffer_size = 4 * 1024 * 1024;  // 4MB
+setsockopt(socket, SOL_SOCKET, SO_SNDBUF, 
+           &send_buffer_size, sizeof(send_buffer_size));
+
+int recv_buffer_size = 4 * 1024 * 1024;  // 4MB
+setsockopt(socket, SOL_SOCKET, SO_RCVBUF,
+           &recv_buffer_size, sizeof(recv_buffer_size));
+```
+
+#### 3. TCP Optimization
+
+Nagle's algorithm is disabled to reduce latency:
+
+```cpp
+int flag = 1;
+setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, 
+           &flag, sizeof(flag));
+```
+
+This ensures that small screen updates are sent immediately rather than being delayed to coalesce with other data.
+
+#### 4. Rendering Pipeline
+
+The receiver uses SDL2 for hardware-accelerated display:
+
+```cpp
+// SDL2 initialization
+SDL_Init(SDL_INIT_VIDEO);
+SDL_Window* window = SDL_CreateWindow("RGM Receiver", 
+                                      SDL_WINDOWPOS_UNDEFINED,
+                                      SDL_WINDOWPOS_UNDEFINED,
+                                      width, height,
+                                      SDL_WINDOW_RESIZABLE);
+SDL_Renderer* renderer = SDL_CreateRenderer(window, -1, 
+                                            SDL_RENDERER_ACCELERATED);
+
+// Texture for video frames
+SDL_Texture* texture = SDL_CreateTexture(renderer,
+                                         SDL_PIXELFORMAT_RGB24,
+                                         SDL_TEXTUREACCESS_STREAMING,
+                                         width, height);
+```
+
+### Protocol Details
+
+#### SSDP Message Format
+
+**Search Request (Sender)**
+
+```
+M-SEARCH * HTTP/1.1
+HOST: 239.255.255.250:1900
+MAN: "ssdp:discover"
+MX: 3
+ST: rgm:screenreceiver
+```
+
+**Search Response (Receiver)**
+
+```
+HTTP/1.1 200 OK
+CACHE-CONTROL: max-age=1800
+DATE: [timestamp]
+LOCATION: http://[receiver-ip]:8081/rgm.xml
+SERVER: RGM/2.0 [OS/version]
+ST: rgm:screenreceiver
+USN: uuid:[device-uuid]::urn:rgm:screenreceiver
+```
+
+#### Streaming Protocol
+
+Once TCP connection is established, data transmission follows this format:
+
+| Field | Size | Description |
+|-------|------|-------------|
+| Magic Number | 4 bytes | 0x52474D ('RGMD') |
+| Frame Number | 4 bytes | Incrementing counter |
+| Timestamp | 8 bytes | Microseconds since epoch |
+| Width | 4 bytes | Frame width in pixels |
+| Height | 4 bytes | Frame height in pixels |
+| Data Size | 4 bytes | Size of pixel data |
+| Pixel Data | Variable | Raw RGB24 data |
+
+### Message Sequence Chart
+
+```
+Sender                          Network                         Receiver
+  |                               |                               |
+  | ----- M-SEARCH (multicast) -->|                               |
+  |                               |                               |
+  |                               | <---- NOTIFY (if running) ----|
+  |                               |                               |
+  | <---- 200 OK (from receiver) -|                               |
+  |                               |                               |
+  | ------- TCP SYN ------------> |                               |
+  | <------ TCP SYN-ACK --------- |                               |
+  | ------- TCP ACK ------------> |                               |
+  |                               |                               |
+  | -------- Stream Setup ------->|                               |
+  | <------ Ready Acknowledge ----|                               |
+  |                               |                               |
+  | ======== Video Frames =======>|                               |
+  | ======== Video Frames =======>|                               |
+  | ======== Video Frames =======>|                               |
+  |                               |                               |
+  | ------- TCP FIN ------------> |                               |
+  | <------ TCP ACK --------------|                               |
+  | <------ TCP FIN --------------|                               |
+  | ------- TCP ACK ------------> |                               |
+  |                               |                               |
+```
+
+### Performance Optimizations
+
+1. **Zero-Copy Architecture**
+   - Screen capture writes directly to buffer
+   - No intermediate copying of frame data
+
+2. **Buffer Overflow Protection**
+   - 4MB buffers absorb network jitter
+   - Drop frames when buffer exceeds threshold
+
+3. **TCP_NODELAY**
+   - Disables Nagle's algorithm
+   - Reduces latency for small screen updates
+
+4. **Multi-threading**
+   - Capture thread: Reads screen continuously
+   - Network thread: Transmits data asynchronously
+   - Render thread: Displays frames independently
 
 ---
 
-## 3. INSTALLATION
+## System Requirements
 
-### A. Quick Install (Ubuntu/Debian)
+### Hardware Specifications
+
+| Component | Minimum | Recommended |
+|-----------|---------|--------------|
+| Processor | 1 GHz single-core | 2 GHz dual-core |
+| Memory | 256 MB | 512 MB |
+| Network | 100 Mbps | 1 Gbps |
+| Display | 800x600 | 1920x1080 |
+
+### Software Requirements by Platform
+
+#### Linux
+
+| Requirement | Specification |
+|-------------|---------------|
+| Distribution | Ubuntu 18.04+, Debian 10+, Fedora 32+, Arch Linux |
+| Compiler | GCC 4.8+ with C++11 support |
+| Libraries | libX11-dev, libsdl2-dev, pthread |
+| Build Tool | make |
+
+#### Windows
+
+| Requirement | Specification |
+|-------------|---------------|
+| Version | Windows 10 (build 1903+) or Windows 11 |
+| Compiler | MinGW-w64 7.0+ or MSVC 2019+ |
+| SDK | Windows SDK 10.0+ |
+| Libraries | SDL2 development libraries |
+
+#### macOS
+
+| Requirement | Specification |
+|-------------|---------------|
+| Version | macOS Catalina (10.15) or newer |
+| Compiler | Clang 12.0+ (Xcode 12+) |
+| Libraries | SDL2 (via Homebrew) |
+| Optional | XQuartz for X11 fallback |
+
+---
+
+## Installation
+
+### Linux (Ubuntu/Debian)
 
 ```bash
-# Clone or download the source
-cd ~/RGM
+# Clone the repository
+git clone https://github.com/RR-Ralefaso/RGM.git
+cd RGM
 
 # Install dependencies
-sudo apt-get update
-sudo apt-get install g++ make libx11-dev libsdl2-dev
+sudo apt update
+sudo apt install g++ make libx11-dev libsdl2-dev
 
 # Build the application
 make clean
@@ -120,19 +420,41 @@ make
 ./app
 ```
 
-### B. Windows Installation
-
-1. Install MinGW-w64 or Visual Studio
-2. Download SDL2 development libraries
-3. Open Command Prompt in source directory
-4. Run:
+### Linux (Fedora/RHEL/CentOS)
 
 ```bash
+sudo dnf install gcc-c++ make libX11-devel SDL2-devel
+git clone https://github.com/RR-Ralefaso/RGM.git
+cd RGM
+make
+./app
+```
+
+### Linux (Arch)
+
+```bash
+sudo pacman -S gcc make libx11 sdl2
+git clone https://github.com/RR-Ralefaso/RGM.git
+cd RGM
+make
+./app
+```
+
+### Windows
+
+```bash
+# Using MinGW-w64
+git clone https://github.com/RR-Ralefaso/RGM.git
+cd RGM
+
+# Build (ensure SDL2 is properly configured)
 mingw32-make
+
+# Run
 ./app.exe
 ```
 
-### C. macOS Installation
+### macOS
 
 ```bash
 # Install Homebrew if not present
@@ -142,379 +464,279 @@ mingw32-make
 brew install sdl2 make
 
 # Build
+git clone https://github.com/RR-Ralefaso/RGM.git
+cd RGM
 make
 ./app
 ```
 
-### D. Other Distributions
-
-**Fedora/RHEL/CentOS:**
-
-```bash
-sudo yum install gcc-c++ make libX11-devel SDL2-devel
-```
-
-**Arch Linux:**
-
-```bash
-sudo pacman -S gcc make libx11 sdl2
-```
-
-**Or use the built-in installer:**
-
-```bash
-make install-deps
-```
-
 ---
 
-## 4. BUILDING FROM SOURCE
-
-### Directory Structure
-
-```
-RGM/
-├── Makefile              # Build configuration
-├── src/
-│   ├── app.cpp          # Launcher application
-│   ├── sender.cpp       # Screen sender
-│   ├── receiver.cpp     # Screen receiver
-│   ├── discover.cpp     # SSDP discovery engine
-│   └── discover.h       # Discovery API
-├── assets/
-│   └── icons/
-│       └── RGM.png      # Optional logo (BMP format)
-└── README.md            # This file
-```
+## Building from Source
 
 ### Build Commands
 
-```bash
-# Clean build (removes all binaries and object files)
-make clean
+| Command | Description |
+|---------|-------------|
+| `make` | Build all components (default) |
+| `make clean` | Remove object files and binaries |
+| `make app` | Build launcher only |
+| `make sender` | Build sender only |
+| `make receiver` | Build receiver only |
+| `make debug` | Build with debug symbols |
+| `make check` | Verify build environment |
 
-# Build everything (default)
-make
+### Build Output
 
-# Build specific components
-make app          # Build only the launcher
-make sender       # Build only the sender
-make receiver     # Build only the receiver
+After successful compilation, the following executables are created in the root directory:
 
-# Build with debug symbols
-make debug
+- `app` - Launcher application
+- `sender` - Screen streaming utility
+- `receiver` - Display utility
 
-# Check build environment
-make check
-```
-
-### Compilation Output
-
-After successful build, you'll have these executables:
-
-- `app` (or `app.exe` on Windows) - Launcher application (menu-driven)
-- `sender` (or `sender.exe`) - Screen sender (streams your screen)
-- `receiver` (or `receiver.exe`) - Screen receiver (displays received stream)
+Object files are stored in the `build/` directory.
 
 ---
 
-## 5. USAGE GUIDE
+## Usage Guide
 
-### A. Basic Usage (Recommended)
+### Basic Operation
 
-**On the receiving computer:**
+#### On the Receiving Machine
 
 ```bash
 ./receiver
-# or
-make run-receiver
 ```
 
-**On the sending computer:**
+Expected output:
+
+```
+[RGM Receiver v2.0]
+Listening for senders on port 8081
+SSDP discovery enabled
+Ready to receive connections
+```
+
+#### On the Sending Machine
 
 ```bash
 ./sender
-# or
-make run-sender
 ```
 
-1. The sender will automatically discover receivers on the network
-2. Select the receiver from the list
-3. Streaming begins automatically
+Interactive session:
 
-### B. Using the Launcher
+```
+Scanning network for receivers...
+Found 2 receiver(s):
+[1] Office-PC (192.168.1.102)
+[2] Living-Room (192.168.1.105)
+Select receiver (1-2): 1
+Connecting to 192.168.1.102:8081...
+Connection established. Streaming at 1920x1080 @ 60 FPS
+```
+
+### Using the Launcher
 
 ```bash
 ./app
-# or
-make run
 ```
 
-The launcher provides a menu:
+The launcher presents a menu interface:
 
 ```
 ╔═══════════════════════════════════════╗
-║              RGM v2.0                 ║
+║             RGM v2.0                  ║
 ╠═══════════════════════════════════════╣
 ║                                       ║
-║  1. 🎥 SEND SCREEN                    ║
-║  2. 📺 RECEIVE SCREEN                 ║
-║  3. ❌ EXIT                           ║
+║  1. SEND SCREEN                       ║
+║  2. RECEIVE SCREEN                    ║
+║  3. EXIT                              ║
 ║                                       ║
 ╚═══════════════════════════════════════╝
 ```
 
-### C. Demo Mode
+### Application Controls
 
-To see instructions for running a demo:
+#### Receiver Controls
 
-```bash
-make run-demo
-```
+| Key | Action |
+|-----|--------|
+| ESC or Q | Quit application |
+| Window resize | Scale video (maintains aspect ratio) |
+| Close window | Stop receiving |
 
-This shows how to run sender and receiver in separate terminals.
+#### Sender Controls
 
----
-
-## 6. COMMAND LINE REFERENCE
-
-### Makefile Commands
-
-| Command | Description |
-|---------|-------------|
-| `make` | Build all components |
-| `make app` | Build launcher only |
-| `make sender` | Build sender only |
-| `make receiver` | Build receiver only |
-| `make clean` | Remove build files |
-| `make run` | Run launcher app |
-| `make run-sender` | Run sender directly |
-| `make run-receiver` | Run receiver directly |
-| `make run-demo` | Show demo instructions |
-| `make debug` | Build with debug symbols |
-| `make check` | Check build environment |
-| `make install-deps` | Install dependencies |
-| `make help` | Show this help |
-
-### Application Controls (Receiver)
-
-- `ESC` or `Q` - Quit the receiver
-- Window resize - Automatically scales the video
-- Close window - Stop receiving
-
-### Application Controls (Sender)
-
-- `Ctrl+C` - Stop sending and exit
-- Automatic discovery - Lists available receivers
+| Key | Action |
+|-----|--------|
+| Ctrl+C | Graceful shutdown |
+| Number keys | Select receiver from list |
 
 ---
 
-## 7. TROUBLESHOOTING
+## Network Configuration
 
-| Problem | Solution |
-|---------|----------|
-| **"No receivers found!"** | ✓ Ensure receiver is running on another machine<br>✓ Check firewall settings (UDP 1900, TCP 8081)<br>✓ Verify both machines are on the same network<br>✓ Try disabling firewall temporarily for testing<br>✓ Run `make check` to verify build environment |
-| **"Connection refused" or timeout** | ✓ Verify receiver is running (`ps aux \| grep receiver` on Linux/macOS, Task Manager on Windows)<br>✓ Check if port 8081 is open<br>✓ Try telnet: `telnet <receiver-ip> 8081`<br>✓ Check for other applications using port 8081 |
-| **Poor performance or low FPS** | ✓ Check network speed (1Gbps recommended for 60 FPS)<br>✓ Reduce screen resolution if necessary<br>✓ Close bandwidth-heavy applications<br>✓ Use wired Ethernet instead of WiFi<br>✓ Check CPU usage on both machines |
-| **Build fails with "missing separator"** | ✓ Ensure Makefile uses tabs, not spaces, for indentation<br>✓ Run `make clean` before rebuilding |
-| **SDL2 not found during build** | ✓ Install SDL2 development libraries for your platform |
+### Firewall Rules
 
----
-
-## 8. NETWORK REQUIREMENTS
-
-### Ports Used
-
-- **UDP 1900** - SSDP discovery (multicast)
-- **TCP 8081** - Video streaming
-
-### Firewall Configuration
-
-**For Linux (using iptables):**
+#### Linux (iptables)
 
 ```bash
 # Allow SSDP discovery
 sudo iptables -A INPUT -p udp --dport 1900 -j ACCEPT
 sudo iptables -A OUTPUT -p udp --sport 1900 -j ACCEPT
 
-# Allow video stream
+# Allow video streaming
 sudo iptables -A INPUT -p tcp --dport 8081 -j ACCEPT
 sudo iptables -A OUTPUT -p tcp --sport 8081 -j ACCEPT
 ```
 
-**For Ubuntu with UFW:**
+#### Linux (UFW)
 
 ```bash
-sudo ufw allow 1900/udp
-sudo ufw allow 8081/tcp
+sudo ufw allow 1900/udp comment 'RGM SSDP Discovery'
+sudo ufw allow 8081/tcp comment 'RGM Video Stream'
+sudo ufw reload
 ```
 
-**For Windows Defender Firewall:**
+#### Windows (PowerShell - Administrator)
 
 ```powershell
-New-NetFirewallRule -DisplayName "RGM Discovery" -Direction Inbound -Protocol UDP -LocalPort 1900 -Action Allow
-New-NetFirewallRule -DisplayName "RGM Stream" -Direction Inbound -Protocol TCP -LocalPort 8081 -Action Allow
+New-NetFirewallRule -DisplayName "RGM Discovery (UDP)" `
+  -Direction Inbound -Protocol UDP -LocalPort 1900 -Action Allow
+
+New-NetFirewallRule -DisplayName "RGM Stream (TCP)" `
+  -Direction Inbound -Protocol TCP -LocalPort 8081 -Action Allow
 ```
 
-**For macOS:**
+#### macOS
 
 ```bash
 sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /path/to/receiver
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /path/to/sender
 ```
 
-### Network Topology
+### Network Requirements
 
-- Works best on same subnet (broadcast domain)
-- Supports WiFi but Ethernet recommended for 60 FPS
+- All devices must be on the same subnet
 - Multicast must be enabled on network switches
-- Works across VLANs if multicast routing is configured
+- Ethernet connection recommended for 60 FPS streaming
+- WiFi 5GHz band recommended over 2.4GHz
+
+---
+
+## Performance Characteristics
 
 ### Bandwidth Requirements
 
-| Resolution | FPS | Bandwidth (approx) |
-|------------|-----|-------------------|
-| 1920x1080 | 60 | ~280 MB/s |
-| 1920x1080 | 30 | ~140 MB/s |
-| 1280x720 | 60 | ~125 MB/s |
-| 1280x720 | 30 | ~62 MB/s |
+| Resolution | 30 FPS | 60 FPS |
+|------------|--------|--------|
+| 1280x720 (720p) | ~125 MB/s | ~250 MB/s |
+| 1920x1080 (1080p) | ~280 MB/s | ~560 MB/s |
+| 2560x1440 (1440p) | ~500 MB/s | ~1 GB/s |
+| 3840x2160 (4K) | ~1.1 GB/s | ~2.2 GB/s |
 
-*Note: Actual bandwidth depends on screen content complexity*
+*Note: Actual bandwidth depends on screen content complexity. Static content requires less bandwidth than rapidly changing video.*
 
----
+### Latency Characteristics
 
-## 9. FUTURE UPGRADE POINTS
-
-The codebase is designed with future enhancements in mind:
-
-### Planned Features
-
-- [ ] **Video Compression** - H.264/H.265 support for bandwidth reduction
-- [ ] **Audio Capture** - Stream system audio along with video
-- [ ] **Encryption** - SSL/TLS for secure streaming
-- [ ] **Multi-monitor Support** - Select which display to share
-- [ ] **Region Selection** - Share only a portion of the screen
-- [ ] **Adaptive FPS** - Adjust based on network conditions
-- [ ] **Pause/Resume** - Control streaming without disconnecting
-- [ ] **Authentication** - Password protection for receivers
-- [ ] **Recording** - Save streams to disk on receiver side
-- [ ] **Picture-in-Picture** - Multiple simultaneous senders
-- [ ] **Wayland Support** - Additional display server support
-- [ ] **GPU Acceleration** - DirectX/OpenGL/Vulkan capture
+| Network Type | Average Latency |
+|--------------|-----------------|
+| Wired Ethernet (1 Gbps) | < 5 ms |
+| WiFi 5 GHz (ac) | 10-15 ms |
+| WiFi 2.4 GHz (n) | 20-30 ms |
 
 ---
 
-## 10. AUTHOR & CREDITS
+## Troubleshooting
 
-### Author
+| Issue | Diagnostic | Solution |
+|-------|------------|----------|
+| No receivers found | Check network connectivity | Verify firewall allows UDP 1900 |
+| Connection refused | Verify receiver is running | Check if port 8081 is open |
+| Low FPS | Monitor network utilization | Use wired Ethernet connection |
+| Build failures | Run `make check` | Install missing dependencies |
 
-**RGM** is created and maintained by **[RR-Ralefaso (polaris)](https://github.com/RR-Ralefaso)** - an experienced Software Developer, Systems Analyst, and aspiring researcher focused on Applied Mathematics and Computer Science.
+### Diagnostic Commands
+
+```bash
+# Check if receiver is listening
+netstat -tulpn | grep 8081
+
+# Test connectivity
+telnet <receiver-ip> 8081
+
+# Verify build environment
+make check
+```
+
+---
+
+## Roadmap
+
+### Planned Enhancements
+
+- [ ] Video compression (H.264/H.265) for bandwidth reduction
+- [ ] Audio capture and streaming
+- [ ] Encryption (TLS/SSL) for secure transmission
+- [ ] Multi-monitor selection
+- [ ] Region selection for partial screen sharing
+- [ ] Adaptive FPS based on network conditions
+- [ ] Session pause/resume functionality
+- [ ] Password authentication
+- [ ] Stream recording capability
+- [ ] Wayland display server support
+- [ ] GPU-accelerated capture
+
+---
+
+## Support the Project
 
 <div align="center">
-  
-### 💖 Support the Developer 💖
-  
-  [![GitHub Sponsors](https://img.shields.io/badge/Sponsor%20on%20GitHub-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#white)](https://github.com/sponsors/RR-Ralefaso)
-  
-  Your sponsorship helps dedicate more time to:
 
-- ✨ Adding new features
-- 🐛 Fixing bugs quickly
-- 📚 Improving documentation
-- 🌍 Supporting more platforms
-  
-  **Every star and sponsor makes a difference!** ⭐
-  
-</div>
+### Show Your Support
 
-- **GitHub:** [@RR-Ralefaso](https://github.com/RR-Ralefaso)
-- **Areas of Expertise:** Backend systems, AI/ML, Computer Vision, Systems Programming
-- **Technical Stack:** C++, Python, Rust, Go, Java, and more
+| Action | Impact |
+|--------|--------|
+| [Star on GitHub](https://github.com/RR-Ralefaso/RGM) | Increases project visibility |
+| [Become a Sponsor](https://github.com/sponsors/RR-Ralefaso) | Funds ongoing development |
+| [Report Issues](https://github.com/RR-Ralefaso/RGM/issues) | Helps improve stability |
+| [Contribute Code](https://github.com/RR-Ralefaso/RGM/pulls) | Accelerates feature development |
 
-### Core Contributions
+Your support enables:
 
-- Architecture design and implementation
-- SSDP discovery protocol integration
-- Cross-platform socket handling
-- SDL2 integration for display
+- Regular maintenance and bug fixes
+- New feature development
+- Cross-platform improvements
+- Documentation updates
 - Performance optimizations
-- Windows and macOS compatibility
 
-### Acknowledgments
+</div>
 
-Special thanks to:
+---
 
-- The open-source community
-- SDL2 development team
-- X11 and network programming communities
-- All contributors and users
-- **GitHub Sponsors** who make continued development possible
+## License
 
-### Version History
+Copyright © 2024 RR-Ralefaso (polaris)
 
-| Version | Date | Changes |
-|---------|------|---------|
-| v2.0 | 2024 | Complete rewrite with SSDP discovery, SDL2 interface, improved performance |
-| v1.0 | 2023 | Initial release with basic TCP streaming |
-
-### Support
-
-For issues, questions, or contributions:
-
-- Check the troubleshooting section first
-- Verify network and firewall settings
-- Ensure all dependencies are installed
-- Run `make check` for environment diagnostics
-- [Open an issue](https://github.com/RR-Ralefaso/RGM/issues)
-- [Become a sponsor](https://github.com/sponsors/RR-Ralefaso)
+This project is open source software. All rights reserved.
 
 ---
 
 <div align="center">
-  
+
 ```
-      ╔══════════════════════════════════════╗
-      ║  Thank you for using RGM             ║
-      ║     Share your screen, simply.       ║
-      ╚══════════════════════════════════════╝
+╔════════════════════════════════════════════════════════════════╗
+║                                                                ║
+║   "Seeking to solve complex business problems through          ║
+║    analytical precision and elegant code - on any platform."   ║
+║                                                                ║
+║                    - RR-Ralefaso (polaris)                     ║
+║                                                                ║
+╚════════════════════════════════════════════════════════════════╝
 ```
 
----
+**Linux • Windows 10/11 • macOS - One codebase, all platforms.**
 
-  <img src="assets/icons/rcorp.jpeg" alt="R-Corp Logo" width="100"/>
-  <p><strong>Created by RR-Ralefaso (polaris)</strong></p>
-  <p>ROOT ACCESS FOR EVERYONE</p>
-
----
-
-  ⭐ **Like this project?** [Star it on GitHub](https://github.com/RR-Ralefaso/RGM)  
-  💖 **Love it?** [Become a sponsor](https://github.com/sponsors/RR-Ralefaso)
-
----
+[Star on GitHub](https://github.com/RR-Ralefaso/RGM) • [Sponsor Development](https://github.com/sponsors/RR-Ralefaso)
 
 </div>
-
-```
-╔════════════════════════════════════════════════════════════════════════════╗
-║                                                                            ║
-║   "Seeking to solve complex business problems through analytical          ║
-║    precision and elegant code - on any platform."                         ║
-║                                                                            ║
-║                    - RR-Ralefaso (polaris)                                ║
-║                                                                            ║
-╚════════════════════════════════════════════════════════════════════════════╝
-
-🌐 **Linux** • **Windows 10/11** • **macOS** - One codebase, all platforms.
-```
-
-<div align="center">
-  
-### 📊 Project Stats
-  
-  [![GitHub stars](https://img.shields.io/github/stars/RR-Ralefaso/RGM?style=social)](https://github.com/RR-Ralefaso/RGM/stargazers)
-  [![GitHub forks](https://img.shields.io/github/forks/RR-Ralefaso/RGM?style=social)](https://github.com/RR-Ralefaso/RGM/network/members)
-  [![GitHub sponsors](https://img.shields.io/github/sponsors/RR-Ralefaso?style=social)](https://github.com/sponsors/RR-Ralefaso)
-  
-  **Your support means the world!** 🌍
-
-</div>
-```

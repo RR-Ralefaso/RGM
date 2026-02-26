@@ -55,7 +55,7 @@ std::atomic<bool> g_running{true};
  */
 void showSplashScreen()
 {
-    std::cout << "🎬 Initializing RGM Screen Share..." << std::endl;
+    std::cout << "🎬 Initializing RGM..." << std::endl;
 
     // Initialize SDL with video support only
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
@@ -66,7 +66,7 @@ void showSplashScreen()
 
     // Create a splash window (always on top, no border)
     SDL_Window *splashWindow = SDL_CreateWindow(
-        "RGM Screen Share",
+        "RGM",
         SDL_WINDOWPOS_CENTERED,
         SDL_WINDOWPOS_CENTERED,
         400, 300, // Splash screen size
@@ -534,7 +534,7 @@ int main()
 
     // Display program information
     std::cout << "========================================" << std::endl;
-    std::cout << "🎥 RGM SCREEN SHARE SENDER v2.0" << std::endl;
+    std::cout << "🎥 RGM SENDER v2.0" << std::endl;
     std::cout << "========================================" << std::endl;
     std::cout << "Detected Resolution: " << SCREEN_WIDTH << "x" << SCREEN_HEIGHT << std::endl;
     std::cout << "Target FPS: " << TARGET_FPS << std::endl;

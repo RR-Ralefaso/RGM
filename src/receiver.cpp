@@ -332,7 +332,7 @@ bool handleClientConnection(int client_sock)
     }
 
     // Create main window
-    SDL_Window *window = SDL_CreateWindow("RGM Screen Share Receiver",
+    SDL_Window *window = SDL_CreateWindow("RGM Receiver",
                                           SDL_WINDOWPOS_CENTERED,
                                           SDL_WINDOWPOS_CENTERED,
                                           window_width,
@@ -542,7 +542,7 @@ bool handleClientConnection(int client_sock)
 int main()
 {
     std::cout << "========================================" << std::endl;
-    std::cout << "📺 RGM SCREEN SHARE RECEIVER v2.0" << std::endl;
+    std::cout << "📺 RGM RECEIVER v2.0" << std::endl;
     std::cout << "========================================" << std::endl;
     std::cout << "Local IP: " << getLocalIPAddress() << std::endl;
     std::cout << "TCP Port: " << TCP_STREAM_PORT << std::endl;

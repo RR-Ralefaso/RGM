@@ -1,7 +1,7 @@
 /**
- * APP.CPP - RGM SCREEN SHARE LAUNCHER
+ * APP.CPP - RGM LAUNCHER
  *
- * This is the main entry point for the RGM Screen Share application.
+ * This is the main entry point for the RGM application.
  * It displays the RGM splash screen and provides a menu for users to
  * choose between sender and receiver modes.
  */
@@ -24,7 +24,7 @@
 
 // Version information
 #define VERSION "2.0.0"
-#define APP_NAME "RGM Screen Share"
+#define APP_NAME "RGM"
 
 // Splash screen constants
 #define SPLASH_WIDTH 500
@@ -359,7 +359,7 @@ int main()
             runReceiver();
             break;
         case 3:
-            std::cout << COLOR_GREEN << "\n👋 Thank you for using RGM Screen Share!\n"
+            std::cout << COLOR_GREEN << "\n👋 Thank you for using RGM!\n"
                       << COLOR_RESET;
             return 0;
         }
