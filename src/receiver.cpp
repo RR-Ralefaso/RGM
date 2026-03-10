@@ -40,6 +40,9 @@
 #include <algorithm>
 #include <ctime>
 #include <string>
+#include <fstream>
+#include <mutex>
+#include <map>
 
 #include <SDL2/SDL.h>
 /* SDL2_image: required for rcorp.jpeg splash (install libsdl2-image-dev) */
@@ -75,11 +78,43 @@ typedef SOCKET plat_sock_t;
 #include <fcntl.h>
 #include <errno.h>
 #include <signal.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 typedef int plat_sock_t;
 #define PLAT_INVALID (-1)
 #define PLAT_CLOSE(s) close(s)
 #define PLAT_VALID(s) ((s) >= 0)
 #define ACCEPT_LEN_T socklen_t
+#endif
+
+/* ── GPU Operation constants (must match gpu_accelerate.h) ──────────────── */
+#ifndef GPU_OP_COMPRESS
+#define GPU_OP_PING 0xFF
+#define GPU_OP_COMPRESS 0x01
+#define GPU_OP_COLORCONV 0x03
+#endif
+
+/* ── ANSI colours ───────────────────────────────────────────────────────── */
+#ifdef _WIN32
+#define COLOR_RESET ""
+#define COLOR_RED ""
+#define COLOR_GREEN ""
+#define COLOR_YELLOW ""
+#define COLOR_BLUE ""
+#define COLOR_MAGENTA ""
+#define COLOR_CYAN ""
+#define COLOR_WHITE ""
+#define COLOR_BOLD ""
+#else
+#define COLOR_RESET "\033[0m"
+#define COLOR_RED "\033[31m"
+#define COLOR_GREEN "\033[32m"
+#define COLOR_YELLOW "\033[33m"
+#define COLOR_BLUE "\033[34m"
+#define COLOR_MAGENTA "\033[35m"
+#define COLOR_CYAN "\033[36m"
+#define COLOR_WHITE "\033[37m"
+#define COLOR_BOLD "\033[1m"
 #endif
 
 /* ── Display mode constants (must match sender.cpp) ─────────────────────── */
@@ -93,8 +128,216 @@ typedef int plat_sock_t;
 #define SSDP_ADDR "239.255.255.250"
 #define SSDP_PORT 1900
 #define MAX_FRAME_BYTES (7680u * 4320u * 3u)
+#define GPU_STATS_FILE "gpu_stats.json"
+#define GPU_STATS_INTERVAL 60 // Write stats every 60 seconds
 
 static const int SOCK_BUF = 4 * 1024 * 1024;
+
+/* ── GPU Statistics Structure ───────────────────────────────────────────── */
+struct GPUStats
+{
+    std::chrono::system_clock::time_point start_time;
+    std::chrono::system_clock::time_point last_stats_write;
+
+    // Operation counts
+    uint64_t total_operations = 0;
+    uint64_t compress_ops = 0;
+    uint64_t colorfix_ops = 0;
+    uint64_t ping_ops = 0;
+
+    // Data processed
+    uint64_t total_bytes_in = 0;
+    uint64_t total_bytes_out = 0;
+    uint64_t compressed_bytes_in = 0;
+    uint64_t compressed_bytes_out = 0;
+
+    // Performance metrics
+    double total_processing_ms = 0.0;
+    double avg_compression_ratio = 0.0;
+    uint64_t compression_samples = 0;
+
+    // Client tracking
+    uint64_t total_clients = 0;
+    uint64_t active_clients = 0;
+    uint64_t peak_clients = 0;
+
+    // Per-client tracking
+    std::map<std::string, uint64_t> client_connections;
+
+    // Mutex for thread safety
+    std::mutex stats_mutex;
+
+    GPUStats()
+    {
+        start_time = std::chrono::system_clock::now();
+        last_stats_write = start_time;
+    }
+
+    void recordOperation(uint8_t op, uint32_t bytes_in, uint32_t bytes_out, double ms)
+    {
+        std::lock_guard<std::mutex> lock(stats_mutex);
+
+        total_operations++;
+        total_bytes_in += bytes_in;
+        total_bytes_out += bytes_out;
+        total_processing_ms += ms;
+
+        switch (op)
+        {
+        case GPU_OP_COMPRESS:
+            compress_ops++;
+            compressed_bytes_in += bytes_in;
+            compressed_bytes_out += bytes_out;
+            compression_samples++;
+            // Update running average
+            {
+                double ratio = (double)bytes_out / (double)bytes_in;
+                avg_compression_ratio = avg_compression_ratio * (compression_samples - 1) / compression_samples +
+                                        ratio / compression_samples;
+            }
+            break;
+        case GPU_OP_COLORCONV:
+            colorfix_ops++;
+            break;
+        case GPU_OP_PING:
+            ping_ops++;
+            break;
+        }
+    }
+
+    void recordClient(const std::string &client_ip)
+    {
+        std::lock_guard<std::mutex> lock(stats_mutex);
+        active_clients++;
+        total_clients++;
+        if (active_clients > peak_clients)
+            peak_clients = active_clients;
+
+        auto it = client_connections.find(client_ip);
+        if (it != client_connections.end())
+        {
+            it->second++;
+        }
+        else
+        {
+            client_connections[client_ip] = 1;
+        }
+    }
+
+    void recordClientDisconnect()
+    {
+        std::lock_guard<std::mutex> lock(stats_mutex);
+        if (active_clients > 0)
+            active_clients--;
+    }
+
+    void writeStatsToFile()
+    {
+        std::lock_guard<std::mutex> lock(stats_mutex);
+
+        auto now = std::chrono::system_clock::now();
+        auto uptime = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+
+        std::ofstream file(GPU_STATS_FILE);
+        if (!file.is_open())
+            return;
+
+        file << "{\n";
+        file << "  \"timestamp\": \"" << std::time(nullptr) << "\",\n";
+        file << "  \"uptime_seconds\": " << uptime << ",\n";
+        file << "  \"gpu_stats\": {\n";
+        file << "    \"operations\": {\n";
+        file << "      \"total\": " << total_operations << ",\n";
+        file << "      \"compress\": " << compress_ops << ",\n";
+        file << "      \"colorfix\": " << colorfix_ops << ",\n";
+        file << "      \"ping\": " << ping_ops << "\n";
+        file << "    },\n";
+        file << "    \"data_processed\": {\n";
+        file << "      \"bytes_in\": " << total_bytes_in << ",\n";
+        file << "      \"bytes_out\": " << total_bytes_out << ",\n";
+        file << "      \"bytes_in_mb\": " << std::fixed << std::setprecision(2)
+             << (total_bytes_in / (1024.0 * 1024.0)) << ",\n";
+        file << "      \"bytes_out_mb\": " << (total_bytes_out / (1024.0 * 1024.0)) << "\n";
+        file << "    },\n";
+        file << "    \"compression\": {\n";
+        file << "      \"bytes_in\": " << compressed_bytes_in << ",\n";
+        file << "      \"bytes_out\": " << compressed_bytes_out << ",\n";
+        file << "      \"avg_ratio\": " << std::fixed << std::setprecision(4) << avg_compression_ratio << ",\n";
+        file << "      \"saved_bytes\": " << (compressed_bytes_in - compressed_bytes_out) << ",\n";
+        file << "      \"saved_mb\": " << ((compressed_bytes_in - compressed_bytes_out) / (1024.0 * 1024.0)) << "\n";
+        file << "    },\n";
+        file << "    \"performance\": {\n";
+        file << "      \"total_ms\": " << total_processing_ms << ",\n";
+        file << "      \"avg_ms_per_op\": " << (total_operations > 0 ? total_processing_ms / total_operations : 0) << ",\n";
+        file << "      \"ops_per_second\": " << (uptime > 0 ? (double)total_operations / uptime : 0) << "\n";
+        file << "    },\n";
+        file << "    \"clients\": {\n";
+        file << "      \"active\": " << active_clients << ",\n";
+        file << "      \"peak\": " << peak_clients << ",\n";
+        file << "      \"total_unique\": " << client_connections.size() << ",\n";
+        file << "      \"connections_by_ip\": [\n";
+
+        bool first = true;
+        for (const auto &[ip, count] : client_connections)
+        {
+            if (!first)
+                file << ",\n";
+            file << "        { \"ip\": \"" << ip << "\", \"connections\": " << count << " }";
+            first = false;
+        }
+        file << "\n      ]\n";
+        file << "    }\n";
+        file << "  }\n";
+        file << "}\n";
+
+        file.close();
+        last_stats_write = now;
+    }
+
+    void printStats()
+    {
+        std::lock_guard<std::mutex> lock(stats_mutex);
+
+        auto now = std::chrono::system_clock::now();
+        auto uptime = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+
+        std::cout << "\n"
+                  << COLOR_CYAN << COLOR_BOLD
+                  << "╔══════════════════════════════════════════════════════════╗\n"
+                  << "║                 GPU SERVICE STATISTICS                   ║\n"
+                  << "╠══════════════════════════════════════════════════════════╣\n"
+                  << "║ Operations:                                              ║\n"
+                  << "║   Total: " << std::setw(35) << std::left << (std::to_string(total_operations) + " ops") << "║\n"
+                  << "║   Compress: " << std::setw(34) << std::left << (std::to_string(compress_ops) + " ops") << "║\n"
+                  << "║   Colorfix: " << std::setw(34) << std::left << (std::to_string(colorfix_ops) + " ops") << "║\n"
+                  << "║   Ping: " << std::setw(38) << std::left << (std::to_string(ping_ops) + " ops") << "║\n"
+                  << "║                                                          ║\n"
+                  << "║ Data Processed:                                         ║\n"
+                  << "║   In:  " << std::setw(37) << std::left
+                  << (std::to_string(total_bytes_in / (1024 * 1024)) + " MB") << "║\n"
+                  << "║   Out: " << std::setw(37) << std::left
+                  << (std::to_string(total_bytes_out / (1024 * 1024)) + " MB") << "║\n"
+                  << "║                                                          ║\n"
+                  << "║ Compression:                                            ║\n"
+                  << "║   Avg Ratio: " << std::setw(33) << std::left
+                  << (std::to_string(avg_compression_ratio * 100.0) + "%") << "║\n"
+                  << "║   Saved: " << std::setw(37) << std::left
+                  << (std::to_string((compressed_bytes_in - compressed_bytes_out) / (1024 * 1024)) + " MB") << "║\n"
+                  << "║                                                          ║\n"
+                  << "║ Performance:                                            ║\n"
+                  << "║   Avg ms/op: " << std::setw(32) << std::left
+                  << (std::to_string(total_operations > 0 ? total_processing_ms / total_operations : 0.0) + " ms") << "║\n"
+                  << "║   Ops/sec: " << std::setw(34) << std::left
+                  << (std::to_string(uptime > 0 ? (double)total_operations / uptime : 0.0)) << "║\n"
+                  << "║                                                          ║\n"
+                  << "║ Clients:                                                ║\n"
+                  << "║   Active: " << std::setw(35) << std::left << std::to_string(active_clients) << "║\n"
+                  << "║   Peak: " << std::setw(37) << std::left << std::to_string(peak_clients) << "║\n"
+                  << "║   Unique IPs: " << std::setw(31) << std::left << std::to_string(client_connections.size()) << "║\n"
+                  << "╚══════════════════════════════════════════════════════════╝\n"
+                  << COLOR_RESET << std::endl;
+    }
+};
 
 /* ── Globals ─────────────────────────────────────────────────────────────── */
 static int SCREEN_WIDTH = 1920; /* sender's resolution     */
@@ -107,6 +350,7 @@ static int MY_DISPLAY_WIDTH = 1920;
 static int MY_DISPLAY_HEIGHT = 1080;
 
 static std::atomic<bool> g_running{true};
+static GPUStats g_gpu_stats;
 
 /* ── Platform signal handler ─────────────────────────────────────────────── */
 #ifdef _WIN32
@@ -389,7 +633,47 @@ static void ssdpAdvertisementThread()
 /* ══════════════════════════════════════════════════════════════════════════
  * GPU SERVICE THREAD
  * ══════════════════════════════════════════════════════════════════════════ */
-static void gpuServiceThread() { gpu_service_run(); }
+static void gpuServiceThread()
+{
+    gpu_service_run();
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * GPU STATS WRITER THREAD
+ * ══════════════════════════════════════════════════════════════════════════ */
+static void gpuStatsWriterThread()
+{
+    auto last_print = std::chrono::steady_clock::now();
+
+    while (g_running)
+    {
+        std::this_thread::sleep_for(std::chrono::seconds(10));
+
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - last_print).count();
+
+        // Write JSON stats every GPU_STATS_INTERVAL seconds
+        auto stats_age = std::chrono::duration_cast<std::chrono::seconds>(
+                             std::chrono::system_clock::now() - g_gpu_stats.last_stats_write)
+                             .count();
+
+        if (stats_age >= GPU_STATS_INTERVAL)
+        {
+            g_gpu_stats.writeStatsToFile();
+        }
+
+        // Print to console every 30 seconds
+        if (elapsed >= 30)
+        {
+            g_gpu_stats.printStats();
+            last_print = now;
+        }
+    }
+
+    // Final stats write on exit
+    g_gpu_stats.writeStatsToFile();
+    g_gpu_stats.printStats();
+}
 
 /* ══════════════════════════════════════════════════════════════════════════
  * CLIENT CONNECTION HANDLER  –  screen extender + mirror
@@ -406,6 +690,15 @@ static bool handleClientConnection(plat_sock_t client)
     setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
 
+    /* Get client IP for stats */
+    struct sockaddr_in cli_addr;
+    ACCEPT_LEN_T addr_len = sizeof(cli_addr);
+    getpeername(client, (struct sockaddr *)&cli_addr, &addr_len);
+    std::string client_ip = inet_ntoa(cli_addr.sin_addr);
+
+    /* Record client connection */
+    g_gpu_stats.recordClient(client_ip);
+
     /* ── Receive extended handshake ── */
     struct
     {
@@ -418,6 +711,7 @@ static bool handleClientConnection(plat_sock_t client)
     if (recv_all(client, &hs_in, sizeof(hs_in)) < 0)
     {
         std::cerr << "Handshake receive failed\n";
+        g_gpu_stats.recordClientDisconnect();
         return false;
     }
 
@@ -432,6 +726,7 @@ static bool handleClientConnection(plat_sock_t client)
         TARGET_FPS <= 0 || TARGET_FPS > 240)
     {
         std::cerr << "Invalid handshake\n";
+        g_gpu_stats.recordClientDisconnect();
         return false;
     }
 
@@ -455,6 +750,7 @@ static bool handleClientConnection(plat_sock_t client)
     if (send_all_p(client, &hs_out, sizeof(hs_out)) < 0)
     {
         std::cerr << "Handshake response send failed\n";
+        g_gpu_stats.recordClientDisconnect();
         return false;
     }
 
@@ -462,6 +758,7 @@ static bool handleClientConnection(plat_sock_t client)
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
     {
         std::cerr << "SDL_Init: " << SDL_GetError() << "\n";
+        g_gpu_stats.recordClientDisconnect();
         return false;
     }
 
@@ -512,6 +809,7 @@ static bool handleClientConnection(plat_sock_t client)
     {
         std::cerr << "Window: " << SDL_GetError() << "\n";
         SDL_Quit();
+        g_gpu_stats.recordClientDisconnect();
         return false;
     }
 
@@ -523,6 +821,7 @@ static bool handleClientConnection(plat_sock_t client)
         std::cerr << "Renderer: " << SDL_GetError() << "\n";
         SDL_DestroyWindow(win);
         SDL_Quit();
+        g_gpu_stats.recordClientDisconnect();
         return false;
     }
 
@@ -545,6 +844,7 @@ static bool handleClientConnection(plat_sock_t client)
         SDL_DestroyRenderer(ren);
         SDL_DestroyWindow(win);
         SDL_Quit();
+        g_gpu_stats.recordClientDisconnect();
         return false;
     }
 
@@ -658,7 +958,9 @@ static bool handleClientConnection(plat_sock_t client)
          * If the frame is smaller than a raw RGB frame it was RLE-compressed
          * by the GPU service. Decompress: stream of [run r g b] tuples.
          */
-        if (frame_sz < (uint32_t)full_frame)
+        bool was_compressed = (frame_sz < (uint32_t)full_frame);
+
+        if (was_compressed)
         {
             std::vector<uint8_t> dec;
             dec.reserve(full_frame);
@@ -740,6 +1042,8 @@ static bool handleClientConnection(plat_sock_t client)
     SDL_DestroyRenderer(ren);
     SDL_DestroyWindow(win);
     SDL_Quit();
+
+    g_gpu_stats.recordClientDisconnect();
     return true;
 }
 
@@ -769,6 +1073,7 @@ int main()
               << "  Stream TCP : " << TCP_STREAM_PORT << "\n"
               << "  GPU TCP    : " << GPU_ACCEL_PORT << "\n"
               << "  SSDP UDP   : " << SSDP_ADDR << ":" << SSDP_PORT << "\n"
+              << "  GPU Stats  : " << GPU_STATS_FILE << "\n"
               << "  Modes      : extend-right | extend-below | mirror\n"
               << "========================================\n";
 
@@ -780,6 +1085,7 @@ int main()
 
     std::thread gpu_thread(gpuServiceThread);
     std::thread ssdp_thread(ssdpAdvertisementThread);
+    std::thread stats_thread(gpuStatsWriterThread);
 
     /* TCP stream server */
     plat_sock_t srv = socket(AF_INET, SOCK_STREAM, 0);
@@ -789,6 +1095,7 @@ int main()
         g_running = false;
         ssdp_thread.join();
         gpu_thread.join();
+        stats_thread.join();
         cleanupSockets();
         return 1;
     }
@@ -809,6 +1116,7 @@ int main()
         g_running = false;
         ssdp_thread.join();
         gpu_thread.join();
+        stats_thread.join();
         cleanupSockets();
         return 1;
     }
@@ -845,7 +1153,13 @@ int main()
     g_running = false; /* signal threads before joining */
     ssdp_thread.join();
     gpu_thread.join();
+    stats_thread.join();
     cleanupSockets();
+
+    // Final stats write
+    g_gpu_stats.writeStatsToFile();
+    g_gpu_stats.printStats();
+
     std::cout << "Receiver shut down\n";
     return 0;
 }
