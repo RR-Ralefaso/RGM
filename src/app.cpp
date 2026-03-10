@@ -185,9 +185,9 @@ int showMenu()
     while (choice < 0 || choice > 2)
     {
 #ifdef _WIN32
-        system("cls");
+        std::cout<<"cls"<<std::endl;
 #else
-        system("clear");
+        std::cout<<"clear"<<std::endl;
 #endif
 
         std::cout << COLOR_CYAN << COLOR_BOLD;
