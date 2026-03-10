@@ -367,13 +367,13 @@ std::vector<DiscoveredDevice> discoverReceivers(int timeout_seconds)
 
             if (parseSsdpResponse(response, ip, port))
             {
-                std::cout << "✅ Found potential receiver: " << ip << ":" << port << std::endl;
+                std::cout << "✓ Found potential receiver: " << ip << ":" << port << std::endl;
 
                 std::cout << "   Testing connection..." << std::endl;
                 if (testTcpConnection(ip, port, 500))
                 {
                     discovered_receivers.emplace_back(ip, port);
-                    std::cout << "   ✅ Connection successful!" << std::endl;
+                    std::cout << "   ✓ Connection successful!" << std::endl;
                 }
                 else
                 {

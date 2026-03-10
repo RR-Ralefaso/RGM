@@ -1,8 +1,32 @@
 /**
- * RECEIVER.CPP - VIDEO DISPLAY AND SSDP ADVERTISING
+ * RECEIVER.CPP - SCREEN EXTENDER DISPLAY, SSDP ADVERTISING, GPU SERVICE
  *
- * This module receives and displays screen streams from a sender.
- * It advertises its presence via SSDP for zero-configuration discovery.
+ * Cross-platform: Windows (Winsock2) / Linux / macOS (POSIX).
+ *
+ * Screen Extender Mode
+ * --------------------
+ * When the sender sends MODE_EXTEND_RIGHT or MODE_EXTEND_BELOW, the receiver
+ * opens a BORDERLESS FULLSCREEN window that covers its entire display,
+ * presenting itself as a seamless second monitor.
+ *
+ * In extend mode the window:
+ *  - Is borderless and positioned at (0, 0) on the receiver display
+ *  - Covers the full receiver display (SDL_WINDOW_FULLSCREEN_DESKTOP)
+ *  - Has no title bar or window chrome, so it looks like a real monitor
+ *  - Shows a subtle edge glow where the displays logically join
+ *
+ * In mirror mode a normal resizable window is used (original behaviour).
+ *
+ * Extended handshake (receiver → sender):
+ *   Receiver reads sender's dimensions + mode, opens the appropriate window,
+ *   then sends back its own display size so sender can display total layout.
+ *
+ * Cross-platform notes
+ * --------------------
+ * - plat_sock_t / PLAT_VALID / PLAT_CLOSE unify all socket use.
+ * - ACCEPT_LEN_T = int (Windows) / socklen_t (POSIX).
+ * - Signal: SetConsoleCtrlHandler (Windows) / sigaction (POSIX).
+ * - SDL_WINDOW_FULLSCREEN_DESKTOP is cross-platform in SDL2.
  */
 
 #include <iostream>
@@ -13,13 +37,36 @@
 #include <cstdint>
 #include <atomic>
 #include <iomanip>
-#include <SDL2/SDL.h>
-#include "discover.h"
+#include <algorithm>
+#include <ctime>
+#include <string>
 
+#include <SDL2/SDL.h>
+/* SDL2_image: required for rcorp.jpeg splash (install libsdl2-image-dev) */
+#if __has_include(<SDL2/SDL_image.h>)
+#include <SDL2/SDL_image.h>
+#define HAVE_SDL_IMAGE 1
+#else
+#define HAVE_SDL_IMAGE 0
+#warning "SDL2_image not found – splash will use fallback rectangle."
+#warning "Fix: sudo apt install libsdl2-image-dev  (or: make install-sdl2-image)"
+#endif /* rcorp.jpeg splash */
+#include "discover.h"
+#include "gpu_accelerate.h"
+
+/* ── Platform headers ───────────────────────────────────────────────────── */
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
+typedef SOCKET plat_sock_t;
+#define PLAT_INVALID INVALID_SOCKET
+#define PLAT_CLOSE(s) closesocket(s)
+#define PLAT_VALID(s) ((s) != INVALID_SOCKET)
+#define ACCEPT_LEN_T int
 #else
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -28,675 +75,777 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <signal.h>
+typedef int plat_sock_t;
+#define PLAT_INVALID (-1)
+#define PLAT_CLOSE(s) close(s)
+#define PLAT_VALID(s) ((s) >= 0)
+#define ACCEPT_LEN_T socklen_t
 #endif
 
-// Constants - easily modifiable for future upgrades
-#define TCP_STREAM_PORT 8081                           // TCP port for video streaming
-#define BYTES_PER_PIXEL 3                              // RGB format
-#define SSDP_ADDRESS "239.255.255.250"                 // SSDP multicast address
-#define SSDP_PORT 1900                                 // SSDP port
-#define MAX_DISPLAY_WIDTH 1920                         // Maximum display width (for scaling)
-#define MAX_DISPLAY_HEIGHT 1080                        // Maximum display height (for scaling)
-static const int SOCKET_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB socket buffer
+/* ── Display mode constants (must match sender.cpp) ─────────────────────── */
+#define MODE_MIRROR 0u
+#define MODE_EXTEND_RIGHT 1u
+#define MODE_EXTEND_BELOW 2u
 
-// Global variables for screen dimensions (updated from sender)
-int SCREEN_WIDTH = 1920;  // Default, will be updated from sender
-int SCREEN_HEIGHT = 1080; // Default, will be updated from sender
-int TARGET_FPS = 60;      // Default, will be updated from sender
+/* ── Constants ──────────────────────────────────────────────────────────── */
+#define TCP_STREAM_PORT 8081
+#define BYTES_PER_PIXEL 3
+#define SSDP_ADDR "239.255.255.250"
+#define SSDP_PORT 1900
+#define MAX_FRAME_BYTES (7680u * 4320u * 3u)
 
-// Global flag for thread shutdown (atomic for thread safety)
-std::atomic<bool> g_running{true};
+static const int SOCK_BUF = 4 * 1024 * 1024;
 
-/**
- * SSDP advertisement thread function
- *
- * Handles two types of SSDP traffic:
- * 1. Responds to M-SEARCH queries from senders
- * 2. Sends periodic NOTIFY announcements
- */
-void ssdpAdvertisementThread()
-{
-    std::cout << "📡 Starting SSDP advertiser thread..." << std::endl;
+/* ── Globals ─────────────────────────────────────────────────────────────── */
+static int SCREEN_WIDTH = 1920; /* sender's resolution     */
+static int SCREEN_HEIGHT = 1080;
+static int TARGET_FPS = 60;
+static uint32_t DISPLAY_MODE = MODE_EXTEND_RIGHT;
 
-    // Create UDP socket for SSDP responses
+/* This receiver's own display size (queried via SDL2) */
+static int MY_DISPLAY_WIDTH = 1920;
+static int MY_DISPLAY_HEIGHT = 1080;
+
+static std::atomic<bool> g_running{true};
+
+/* ── Platform signal handler ─────────────────────────────────────────────── */
 #ifdef _WIN32
-    SOCKET response_sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (response_sock == INVALID_SOCKET)
+static BOOL WINAPI consoleHandler(DWORD sig)
+{
+    if (sig == CTRL_C_EVENT || sig == CTRL_BREAK_EVENT ||
+        sig == CTRL_CLOSE_EVENT)
     {
-        std::cerr << "❌ Failed to create SSDP response socket" << std::endl;
-        return;
+        g_running = false;
+        return TRUE;
     }
+    return FALSE;
+}
 #else
-    int response_sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (response_sock < 0)
-    {
-        std::cerr << "❌ Failed to create SSDP response socket" << std::endl;
-        return;
-    }
+static void sigHandler(int) { g_running = false; }
 #endif
 
-    // Allow reuse of address
-    int reuse = 1;
-    setsockopt(response_sock, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(reuse));
+/* ── I/O helpers ─────────────────────────────────────────────────────────── */
+static int recv_all(plat_sock_t s, void *buf, size_t len)
+{
+    char *p = (char *)buf;
+    size_t got = 0;
+    while (got < len)
+    {
+        int n = (int)recv(s, p + got, (int)(len - got), 0);
+        if (n <= 0)
+            return -1;
+        got += (size_t)n;
+    }
+    return 0;
+}
 
-    // Set socket buffer size
-    int sock_buf_size = SOCKET_BUFFER_SIZE;
-    setsockopt(response_sock, SOL_SOCKET, SO_RCVBUF, (char *)&sock_buf_size, sizeof(sock_buf_size));
+static int send_all_p(plat_sock_t s, const void *buf, size_t len)
+{
+    const char *p = (const char *)buf;
+    size_t sent = 0;
+    while (sent < len)
+    {
+        int n = (int)send(s, p + sent, (int)(len - sent), 0);
+        if (n <= 0)
+            return -1;
+        sent += (size_t)n;
+    }
+    return 0;
+}
 
-    // Join multicast group
-    struct ip_mreq mreq;
-    mreq.imr_multiaddr.s_addr = inet_addr(SSDP_ADDRESS);
+/* ── Forward declaration ─────────────────────────────────────────────────── */
+static bool handleClientConnection(plat_sock_t client);
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * SPLASH SCREEN  –  rcorp.jpeg preferred, RGM.png fallback
+ * ══════════════════════════════════════════════════════════════════════════ */
+static void showSplashScreen()
+{
+    if (SDL_Init(SDL_INIT_VIDEO) < 0)
+        return;
+
+#if HAVE_SDL_IMAGE
+    int img_flags = IMG_INIT_PNG | IMG_INIT_JPG;
+    if ((IMG_Init(img_flags) & img_flags) != img_flags)
+        std::cerr << "Splash: SDL_image partial init\n";
+#endif
+
+    SDL_Window *win = SDL_CreateWindow(
+        "RGM", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        480, 300, SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALWAYS_ON_TOP);
+    if (!win)
+    {
+#if HAVE_SDL_IMAGE
+        IMG_Quit();
+#endif
+        SDL_Quit();
+        return;
+    }
+
+    SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+    if (!ren)
+    {
+        SDL_DestroyWindow(win);
+#if HAVE_SDL_IMAGE
+        IMG_Quit();
+#endif
+        SDL_Quit();
+        return;
+    }
+
+    SDL_SetRenderDrawColor(ren, 12, 12, 20, 255);
+    SDL_RenderClear(ren);
+
+    /* rcorp.jpeg first, RGM.png fallback */
+    const char *paths[] = {
+        "../assets/icons/rcorp.jpeg",
+        "assets/icons/rcorp.jpeg",
+        "../assets/icons/RGM.png",
+        "assets/icons/RGM.png",
+#ifndef _WIN32
+        "/usr/share/rgm/icons/rcorp.jpeg",
+        "/usr/share/rgm/icons/RGM.png",
+#endif
+        nullptr};
+    SDL_Surface *img = nullptr;
+#if HAVE_SDL_IMAGE
+    for (int i = 0; paths[i] && !img; i++)
+        img = IMG_Load(paths[i]);
+#endif
+
+    if (!img)
+    {
+        /* Fallback: rcorp-styled blue rectangle */
+        SDL_SetRenderDrawColor(ren, 20, 60, 140, 255);
+        SDL_Rect fill = {30, 30, 420, 240};
+        SDL_RenderFillRect(ren, &fill);
+        SDL_SetRenderDrawColor(ren, 0, 180, 255, 255);
+        SDL_Rect bdr = {28, 28, 424, 244};
+        SDL_RenderDrawRect(ren, &bdr);
+    }
+    else
+    {
+        SDL_Texture *tex = SDL_CreateTextureFromSurface(ren, img);
+        SDL_FreeSurface(img);
+        if (tex)
+        {
+            int tw, th;
+            SDL_QueryTexture(tex, nullptr, nullptr, &tw, &th);
+            float sc = std::min(460.0f / (float)tw, 280.0f / (float)th);
+            SDL_Rect dst;
+            dst.w = (int)(tw * sc);
+            dst.h = (int)(th * sc);
+            dst.x = (480 - dst.w) / 2;
+            dst.y = (300 - dst.h) / 2;
+            SDL_RenderCopy(ren, tex, nullptr, &dst);
+            SDL_DestroyTexture(tex);
+        }
+    }
+
+    SDL_RenderPresent(ren);
+    SDL_Delay(2200);
+
+    SDL_DestroyRenderer(ren);
+    SDL_DestroyWindow(win);
+#if HAVE_SDL_IMAGE
+    IMG_Quit();
+#endif
+    SDL_Quit();
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * QUERY THIS RECEIVER'S DISPLAY SIZE via SDL2
+ * ══════════════════════════════════════════════════════════════════════════ */
+static void queryMyDisplaySize()
+{
+    /* Temporarily init SDL just to get display bounds */
+    if (SDL_Init(SDL_INIT_VIDEO) < 0)
+        return;
+    SDL_DisplayMode dm = {};
+    if (SDL_GetCurrentDisplayMode(0, &dm) == 0)
+    {
+        MY_DISPLAY_WIDTH = dm.w;
+        MY_DISPLAY_HEIGHT = dm.h;
+    }
+    SDL_Quit();
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * SSDP ADVERTISEMENT THREAD
+ * ══════════════════════════════════════════════════════════════════════════ */
+static void ssdpAdvertisementThread()
+{
+    std::cout << "SSDP: starting on port " << SSDP_PORT << "\n";
+
+    plat_sock_t rsock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (!PLAT_VALID(rsock))
+    {
+        std::cerr << "SSDP: socket() failed\n";
+        return;
+    }
+
+    int reuse = 1, sb = SOCK_BUF;
+    setsockopt(rsock, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(reuse));
+    setsockopt(rsock, SOL_SOCKET, SO_RCVBUF, (char *)&sb, sizeof(sb));
+
+    struct ip_mreq mreq = {};
+    mreq.imr_multiaddr.s_addr = inet_addr(SSDP_ADDR);
     mreq.imr_interface.s_addr = INADDR_ANY;
-
-    if (setsockopt(response_sock, IPPROTO_IP, IP_ADD_MEMBERSHIP,
+    if (setsockopt(rsock, IPPROTO_IP, IP_ADD_MEMBERSHIP,
                    (char *)&mreq, sizeof(mreq)) < 0)
     {
-        std::cerr << "❌ Failed to join multicast group" << std::endl;
-#ifdef _WIN32
-        closesocket(response_sock);
-#else
-        close(response_sock);
-#endif
+        std::cerr << "SSDP: multicast join failed\n";
+        PLAT_CLOSE(rsock);
         return;
     }
 
-    // Bind to SSDP port
-    struct sockaddr_in bind_addr;
-    memset(&bind_addr, 0, sizeof(bind_addr));
-    bind_addr.sin_family = AF_INET;
-    bind_addr.sin_addr.s_addr = INADDR_ANY;
-    bind_addr.sin_port = htons(SSDP_PORT);
-
-    if (bind(response_sock, (struct sockaddr *)&bind_addr, sizeof(bind_addr)) < 0)
+    struct sockaddr_in baddr = {};
+    baddr.sin_family = AF_INET;
+    baddr.sin_addr.s_addr = INADDR_ANY;
+    baddr.sin_port = htons(SSDP_PORT);
+    if (bind(rsock, (struct sockaddr *)&baddr, sizeof(baddr)) < 0)
     {
-        std::cerr << "❌ Failed to bind to port " << SSDP_PORT << std::endl;
-#ifdef _WIN32
-        closesocket(response_sock);
-#else
-        close(response_sock);
-#endif
+        std::cerr << "SSDP: bind failed on port " << SSDP_PORT << "\n";
+        PLAT_CLOSE(rsock);
         return;
     }
+    std::cout << "SSDP: listening\n";
 
-    std::cout << "📡 Listening for SSDP M-SEARCH queries on port " << SSDP_PORT << std::endl;
-
-    /**
-     * Response thread - handles incoming M-SEARCH queries
-     */
-    std::thread response_thread([response_sock]()
-                                {
-        char buffer[2048];
-        struct sockaddr_in sender;
-        socklen_t sender_len = sizeof(sender);
-        std::string local_ip = getLocalIPAddress();
-        
-        while (g_running)
-        {
-            // Set receive timeout
-            struct timeval tv;
-            tv.tv_sec = 1;
-            tv.tv_usec = 0;
-            setsockopt(response_sock, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv));
-            
-            // Wait for incoming SSDP messages
-            int bytes = recvfrom(response_sock, buffer, sizeof(buffer) - 1, 0,
-                               (struct sockaddr*)&sender, &sender_len);
-            
-            if (!g_running)
-                break;
-                
-            if (bytes > 0)
-            {
-                buffer[bytes] = '\0';
-                std::string request(buffer);
-                
-                // Check if it's an M-SEARCH for our service
-                if (request.find("M-SEARCH") != std::string::npos && 
-                    request.find("urn:screen-share:receiver") != std::string::npos)
-                {
-                    std::cout << "📡 Received M-SEARCH from " 
-                              << inet_ntoa(sender.sin_addr) << std::endl;
-                    
-                    // Build SSDP response
-                    std::string response = 
-                        "HTTP/1.1 200 OK\r\n"
-                        "CACHE-CONTROL: max-age=30\r\n"
-                        "DATE: " + std::to_string(time(nullptr)) + "\r\n"
-                        "LOCATION: http://" + local_ip + ":" + 
-                        std::to_string(TCP_STREAM_PORT) + "/\r\n"
-                        "SERVER: ScreenShare/1.0\r\n"
-                        "ST: urn:screen-share:receiver\r\n"
-                        "USN: uuid:screen-share-" + local_ip + "\r\n"
-                        "\r\n";
-                    
-                    // Send response
-                    sendto(response_sock, response.c_str(), response.length(), 0,
-                           (struct sockaddr*)&sender, sender_len);
-                    
-                    std::cout << "📡 Sent SSDP response to " 
-                              << inet_ntoa(sender.sin_addr) << std::endl;
-                }
-            }
+    /* M-SEARCH response thread */
+    std::thread resp([rsock]()
+                     {
+        char buf[2048];
+        struct sockaddr_in from = {};
+        ACCEPT_LEN_T flen = sizeof(from);
+        std::string lip = getLocalIPAddress();
+        while (g_running) {
+            struct timeval tv = {1, 0};
+            setsockopt(rsock, SOL_SOCKET, SO_RCVTIMEO, (char *)&tv, sizeof(tv));
+            int n = (int)recvfrom(rsock, buf, (int)sizeof(buf) - 1, 0,
+                                  (struct sockaddr *)&from,
+                                  (ACCEPT_LEN_T *)&flen);
+            if (!g_running || n <= 0) continue;
+            buf[n] = '\0';
+            std::string req(buf);
+            if (req.find("M-SEARCH")                == std::string::npos) continue;
+            if (req.find("urn:screen-share:receiver") == std::string::npos) continue;
+            std::string resp_str =
+                "HTTP/1.1 200 OK\r\n"
+                "CACHE-CONTROL: max-age=30\r\n"
+                "DATE: " + std::to_string((long long)time(nullptr)) + "\r\n"
+                "LOCATION: http://" + lip + ":" +
+                    std::to_string(TCP_STREAM_PORT) + "/\r\n"
+                "SERVER: ScreenShare/1.0\r\n"
+                "ST: urn:screen-share:receiver\r\n"
+                "USN: uuid:screen-share-" + lip + "\r\n\r\n";
+            sendto(rsock, resp_str.c_str(), (int)resp_str.size(), 0,
+                   (struct sockaddr *)&from, (ACCEPT_LEN_T)flen);
+            std::cout << "SSDP: replied to " << inet_ntoa(from.sin_addr) << "\n";
         } });
 
-    /**
-     * Notification thread - sends periodic NOTIFY announcements
-     */
-#ifdef _WIN32
-    SOCKET notify_sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (notify_sock != INVALID_SOCKET)
-#else
-    int notify_sock = socket(AF_INET, SOCK_DGRAM, 0);
-    if (notify_sock >= 0)
-#endif
+    /* NOTIFY thread */
+    plat_sock_t nsock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (PLAT_VALID(nsock))
     {
-        // Enable broadcast
-        int broadcast = 1;
-        setsockopt(notify_sock, SOL_SOCKET, SO_BROADCAST,
-                   (char *)&broadcast, sizeof(broadcast));
-
-        // Set TTL for multicast
-        int ttl = 4;
-        setsockopt(notify_sock, IPPROTO_IP, IP_MULTICAST_TTL,
-                   (char *)&ttl, sizeof(ttl));
-
-        std::string local_ip = getLocalIPAddress();
-
-        // Build NOTIFY message
-        std::string notify_msg =
+        int bc = 1, ttl = 4;
+        setsockopt(nsock, SOL_SOCKET, SO_BROADCAST, (char *)&bc, sizeof(bc));
+        setsockopt(nsock, IPPROTO_IP, IP_MULTICAST_TTL, (char *)&ttl, sizeof(ttl));
+        std::string lip = getLocalIPAddress();
+        std::string notify =
             "NOTIFY * HTTP/1.1\r\n"
             "HOST: " +
-            std::string(SSDP_ADDRESS) + ":" + std::to_string(SSDP_PORT) + "\r\n"
-                                                                          "CACHE-CONTROL: max-age=30\r\n"
-                                                                          "LOCATION: http://" +
-            local_ip + ":" + std::to_string(TCP_STREAM_PORT) + "/\r\n"
-                                                               "NT: urn:screen-share:receiver\r\n"
-                                                               "NTS: ssdp:alive\r\n"
-                                                               "SERVER: ScreenShare/1.0\r\n"
-                                                               "USN: uuid:screen-share-" +
-            local_ip + "\r\n"
-                       "\r\n";
-
-        struct sockaddr_in dest_addr;
-        memset(&dest_addr, 0, sizeof(dest_addr));
-        dest_addr.sin_family = AF_INET;
-        dest_addr.sin_port = htons(SSDP_PORT);
-        inet_pton(AF_INET, SSDP_ADDRESS, &dest_addr.sin_addr);
-
-        std::cout << "📡 Sending SSDP NOTIFY announcements every 30 seconds" << std::endl;
-
-        // Send NOTIFY announcements periodically
-        int notify_count = 0;
+            std::string(SSDP_ADDR) + ":" +
+            std::to_string(SSDP_PORT) + "\r\n"
+                                        "CACHE-CONTROL: max-age=30\r\n"
+                                        "LOCATION: http://" +
+            lip + ":" +
+            std::to_string(TCP_STREAM_PORT) + "/\r\n"
+                                              "NT: urn:screen-share:receiver\r\n"
+                                              "NTS: ssdp:alive\r\n"
+                                              "SERVER: ScreenShare/1.0\r\n"
+                                              "USN: uuid:screen-share-" +
+            lip + "\r\n\r\n";
+        struct sockaddr_in dest = {};
+        dest.sin_family = AF_INET;
+        dest.sin_port = htons(SSDP_PORT);
+        inet_pton(AF_INET, SSDP_ADDR, &dest.sin_addr);
+        int nc = 0;
         while (g_running)
         {
-            sendto(notify_sock, notify_msg.c_str(), notify_msg.length(), 0,
-                   (struct sockaddr *)&dest_addr, sizeof(dest_addr));
-
-            notify_count++;
-            std::cout << "📡 SSDP NOTIFY #" << notify_count << " sent" << std::endl;
-
-            // Wait 30 seconds or until shutdown
+            sendto(nsock, notify.c_str(), (int)notify.size(), 0,
+                   (struct sockaddr *)&dest, sizeof(dest));
+            std::cout << "SSDP: NOTIFY #" << ++nc << "\n";
             for (int i = 0; i < 30 && g_running; i++)
                 std::this_thread::sleep_for(std::chrono::seconds(1));
         }
-
-#ifdef _WIN32
-        closesocket(notify_sock);
-#else
-        close(notify_sock);
-#endif
+        PLAT_CLOSE(nsock);
     }
 
-    // Cleanup
-    g_running = false;
-    response_thread.join();
-#ifdef _WIN32
-    closesocket(response_sock);
-#else
-    close(response_sock);
-#endif
-
-    std::cout << "📡 SSDP advertiser stopped" << std::endl;
+    resp.join();
+    PLAT_CLOSE(rsock);
+    std::cout << "SSDP: stopped\n";
 }
 
-/**
- * Handle a single client connection
- *
- * This function:
- * 1. Receives handshake with screen dimensions
- * 2. Sets up SDL window and renderer
- * 3. Receives and displays video frames
- */
-bool handleClientConnection(int client_sock)
-{
-    // Increase socket buffer size for high FPS streaming
-    int sock_buf_size = SOCKET_BUFFER_SIZE;
-    setsockopt(client_sock, SOL_SOCKET, SO_RCVBUF, (char *)&sock_buf_size, sizeof(sock_buf_size));
+/* ══════════════════════════════════════════════════════════════════════════
+ * GPU SERVICE THREAD
+ * ══════════════════════════════════════════════════════════════════════════ */
+static void gpuServiceThread() { gpu_service_run(); }
 
-    // Set socket timeout
+/* ══════════════════════════════════════════════════════════════════════════
+ * CLIENT CONNECTION HANDLER  –  screen extender + mirror
+ * ══════════════════════════════════════════════════════════════════════════ */
+static bool handleClientConnection(plat_sock_t client)
+{
+    int sb = SOCK_BUF;
+    setsockopt(client, SOL_SOCKET, SO_RCVBUF, (char *)&sb, sizeof(sb));
 #ifdef _WIN32
-    int timeout = 10000; // 10 seconds
-    setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout));
+    DWORD to = 10000;
+    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, (char *)&to, sizeof(to));
 #else
-    struct timeval tv;
-    tv.tv_sec = 10;
-    tv.tv_usec = 0;
-    setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    struct timeval tv = {10, 0};
+    setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
 
-    /**
-     * Receive handshake with screen dimensions
-     */
+    /* ── Receive extended handshake ── */
     struct
     {
-        uint32_t width;
-        uint32_t height;
+        uint32_t sender_width;
+        uint32_t sender_height;
         uint32_t fps;
-    } handshake;
+        uint32_t mode;
+    } hs_in = {};
 
-    int bytes_received = recv(client_sock, (char *)&handshake, sizeof(handshake), 0);
-    if (bytes_received != sizeof(handshake))
+    if (recv_all(client, &hs_in, sizeof(hs_in)) < 0)
     {
-        std::cerr << "❌ Failed to receive screen dimensions from sender" << std::endl;
+        std::cerr << "Handshake receive failed\n";
         return false;
     }
 
-    // Update dimensions from sender
-    SCREEN_WIDTH = ntohl(handshake.width);
-    SCREEN_HEIGHT = ntohl(handshake.height);
-    TARGET_FPS = ntohl(handshake.fps);
+    SCREEN_WIDTH = (int)ntohl(hs_in.sender_width);
+    SCREEN_HEIGHT = (int)ntohl(hs_in.sender_height);
+    TARGET_FPS = (int)ntohl(hs_in.fps);
+    DISPLAY_MODE = ntohl(hs_in.mode);
 
-    std::cout << "📐 Received sender resolution: " << SCREEN_WIDTH << "x" << SCREEN_HEIGHT
-              << " @ " << TARGET_FPS << " FPS" << std::endl;
+    /* Validate */
+    if (SCREEN_WIDTH <= 0 || SCREEN_WIDTH > 7680 ||
+        SCREEN_HEIGHT <= 0 || SCREEN_HEIGHT > 4320 ||
+        TARGET_FPS <= 0 || TARGET_FPS > 240)
+    {
+        std::cerr << "Invalid handshake\n";
+        return false;
+    }
 
-    // Initialize SDL with video support
+    const char *modeStr =
+        DISPLAY_MODE == MODE_EXTEND_RIGHT ? "extend-right" : DISPLAY_MODE == MODE_EXTEND_BELOW ? "extend-below"
+                                                                                               : "mirror";
+
+    std::cout << "Sender: " << SCREEN_WIDTH << "x" << SCREEN_HEIGHT
+              << " @ " << TARGET_FPS << " FPS  mode=" << modeStr << "\n";
+
+    /* ── Send back our display size ── */
+    struct
+    {
+        uint32_t recv_width;
+        uint32_t recv_height;
+        uint32_t status;
+    } hs_out = {
+        htonl((uint32_t)MY_DISPLAY_WIDTH),
+        htonl((uint32_t)MY_DISPLAY_HEIGHT),
+        htonl(0u)};
+    if (send_all_p(client, &hs_out, sizeof(hs_out)) < 0)
+    {
+        std::cerr << "Handshake response send failed\n";
+        return false;
+    }
+
+    /* ── SDL init ── */
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
     {
-        std::cerr << "❌ SDL initialization failed: " << SDL_GetError() << std::endl;
+        std::cerr << "SDL_Init: " << SDL_GetError() << "\n";
         return false;
     }
 
-    /**
-     * Calculate initial window size
-     * Scale down if screen is too large, but maintain aspect ratio
+    /*
+     * Window strategy
+     * ───────────────
+     * EXTEND modes → borderless fullscreen on the receiver's own display.
+     *   SDL_WINDOW_FULLSCREEN_DESKTOP makes the window cover the entire
+     *   display without changing the video mode — cross-platform and safe.
+     *
+     * MIRROR mode → normal resizable window, scaled to fit.
      */
-    int window_width = SCREEN_WIDTH;
-    int window_height = SCREEN_HEIGHT;
+    SDL_Window *win = nullptr;
+    SDL_Renderer *ren = nullptr;
 
-    if (window_width > MAX_DISPLAY_WIDTH || window_height > MAX_DISPLAY_HEIGHT)
+    if (DISPLAY_MODE == MODE_EXTEND_RIGHT ||
+        DISPLAY_MODE == MODE_EXTEND_BELOW)
     {
-        float scale = std::min((float)MAX_DISPLAY_WIDTH / window_width,
-                               (float)MAX_DISPLAY_HEIGHT / window_height);
-        window_width = (int)(window_width * scale);
-        window_height = (int)(window_height * scale);
+        /* Borderless fullscreen — looks like a real second monitor */
+        win = SDL_CreateWindow(
+            "RGM Extended Display",
+            SDL_WINDOWPOS_UNDEFINED_DISPLAY(0),
+            SDL_WINDOWPOS_UNDEFINED_DISPLAY(0),
+            MY_DISPLAY_WIDTH, MY_DISPLAY_HEIGHT,
+            SDL_WINDOW_SHOWN | SDL_WINDOW_FULLSCREEN_DESKTOP);
+    }
+    else
+    {
+        /* Mirror: scale to a normal window */
+        int ww = SCREEN_WIDTH, wh = SCREEN_HEIGHT;
+        const int MAX_W = MY_DISPLAY_WIDTH - 60;
+        const int MAX_H = MY_DISPLAY_HEIGHT - 100;
+        if (ww > MAX_W || wh > MAX_H)
+        {
+            float sc = std::min((float)MAX_W / (float)ww,
+                                (float)MAX_H / (float)wh);
+            ww = (int)(ww * sc);
+            wh = (int)(wh * sc);
+        }
+        win = SDL_CreateWindow(
+            "RGM Mirror",
+            SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+            ww, wh,
+            SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
     }
 
-    // Create main window
-    SDL_Window *window = SDL_CreateWindow("RGM Receiver",
-                                          SDL_WINDOWPOS_CENTERED,
-                                          SDL_WINDOWPOS_CENTERED,
-                                          window_width,
-                                          window_height,
-                                          SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
-
-    if (!window)
+    if (!win)
     {
-        std::cerr << "❌ Window creation failed: " << SDL_GetError() << std::endl;
+        std::cerr << "Window: " << SDL_GetError() << "\n";
         SDL_Quit();
         return false;
     }
 
-    /**
-     * Create hardware-accelerated renderer
-     */
-    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1,
-                                                SDL_RENDERER_ACCELERATED |
-                                                    SDL_RENDERER_PRESENTVSYNC);
-
-    if (!renderer)
+    ren = SDL_CreateRenderer(win, -1,
+                             SDL_RENDERER_ACCELERATED |
+                                 SDL_RENDERER_PRESENTVSYNC);
+    if (!ren)
     {
-        std::cerr << "❌ Renderer creation failed: " << SDL_GetError() << std::endl;
-        SDL_DestroyWindow(window);
+        std::cerr << "Renderer: " << SDL_GetError() << "\n";
+        SDL_DestroyWindow(win);
         SDL_Quit();
         return false;
     }
 
-    // Enable linear filtering for smooth scaling
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
 
-    /**
-     * Create texture with sender's resolution
-     * This texture will be scaled to window size by the renderer
-     */
-    SDL_Texture *texture = SDL_CreateTexture(renderer,
-                                             SDL_PIXELFORMAT_RGB24,
-                                             SDL_TEXTUREACCESS_STREAMING,
-                                             SCREEN_WIDTH,
-                                             SCREEN_HEIGHT);
-
-    if (!texture)
+    /* In extend mode: scale sender's stream to fill our display */
+    if (DISPLAY_MODE == MODE_EXTEND_RIGHT ||
+        DISPLAY_MODE == MODE_EXTEND_BELOW)
     {
-        std::cerr << "❌ Texture creation failed: " << SDL_GetError() << std::endl;
-        SDL_DestroyRenderer(renderer);
-        SDL_DestroyWindow(window);
+        SDL_RenderSetLogicalSize(ren, MY_DISPLAY_WIDTH, MY_DISPLAY_HEIGHT);
+    }
+
+    /* Texture at sender's native resolution (renderer scales it) */
+    SDL_Texture *tex = SDL_CreateTexture(
+        ren, SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING,
+        SCREEN_WIDTH, SCREEN_HEIGHT);
+    if (!tex)
+    {
+        std::cerr << "Texture: " << SDL_GetError() << "\n";
+        SDL_DestroyRenderer(ren);
+        SDL_DestroyWindow(win);
         SDL_Quit();
         return false;
     }
 
-    std::cout << "✅ SDL initialized successfully with " << SCREEN_WIDTH << "x" << SCREEN_HEIGHT << " texture" << std::endl;
+    std::cout << "Display ready: "
+              << SCREEN_WIDTH << "x" << SCREEN_HEIGHT
+              << " → " << MY_DISPLAY_WIDTH << "x" << MY_DISPLAY_HEIGHT
+              << " (" << modeStr << ")\n"
+              << "ESC or Q to disconnect\n";
 
-    // Allocate frame buffer
-    std::vector<uint8_t> frame(SCREEN_WIDTH * SCREEN_HEIGHT * BYTES_PER_PIXEL);
+    /* Draw an initial "connecting" background so the screen goes dark
+       rather than showing desktop bleed-through while waiting for frames */
+    SDL_SetRenderDrawColor(ren, 5, 5, 15, 255);
+    SDL_RenderClear(ren);
 
-    SDL_Event event;
+    /* Edge indicator: draw a thin coloured line on the join edge */
+    if (DISPLAY_MODE == MODE_EXTEND_RIGHT)
+    {
+        SDL_SetRenderDrawColor(ren, 0, 140, 255, 255);
+        SDL_RenderDrawLine(ren, 0, 0, 0, MY_DISPLAY_HEIGHT - 1);
+    }
+    else if (DISPLAY_MODE == MODE_EXTEND_BELOW)
+    {
+        SDL_SetRenderDrawColor(ren, 0, 140, 255, 255);
+        SDL_RenderDrawLine(ren, 0, 0, MY_DISPLAY_WIDTH - 1, 0);
+    }
+    SDL_RenderPresent(ren);
+
+    /* ── Receive and render frames ── */
+    size_t full_frame = (size_t)SCREEN_WIDTH * SCREEN_HEIGHT * BYTES_PER_PIXEL;
+    std::vector<uint8_t> frame;
+    frame.reserve(full_frame);
+
+    SDL_Event ev;
     bool streaming = true;
-    int frames_received = 0;
+    int frames_rx = 0;
     auto start_time = std::chrono::steady_clock::now();
 
-    /**
-     * Main display loop
-     */
     while (streaming && g_running)
     {
-        // Handle SDL events
-        while (SDL_PollEvent(&event))
+
+        /* Event pump */
+        while (SDL_PollEvent(&ev))
         {
-            if (event.type == SDL_QUIT)
+            if (ev.type == SDL_QUIT)
             {
                 streaming = false;
                 g_running = false;
             }
-            else if (event.type == SDL_KEYDOWN)
+            else if (ev.type == SDL_KEYDOWN)
             {
-                if (event.key.keysym.sym == SDLK_ESCAPE ||
-                    event.key.keysym.sym == SDLK_q)
+                SDL_Keycode k = ev.key.keysym.sym;
+                if (k == SDLK_ESCAPE || k == SDLK_q)
                 {
                     streaming = false;
                     g_running = false;
                 }
-            }
-            else if (event.type == SDL_WINDOWEVENT)
-            {
-                if (event.window.event == SDL_WINDOWEVENT_RESIZED)
+                /* F11: toggle fullscreen (extend mode only) */
+                if (k == SDLK_F11 &&
+                    (DISPLAY_MODE == MODE_EXTEND_RIGHT ||
+                     DISPLAY_MODE == MODE_EXTEND_BELOW))
                 {
-                    std::cout << "Window resized to " << event.window.data1 << "x" << event.window.data2 << std::endl;
+                    Uint32 flags = SDL_GetWindowFlags(win);
+                    SDL_SetWindowFullscreen(
+                        win,
+                        (flags & SDL_WINDOW_FULLSCREEN_DESKTOP)
+                            ? 0
+                            : SDL_WINDOW_FULLSCREEN_DESKTOP);
                 }
             }
         }
-
-        // Receive frame size
-        uint32_t net_frame_size;
-        bytes_received = recv(client_sock, (char *)&net_frame_size, 4, 0);
-
-        if (bytes_received <= 0)
-        {
-            if (bytes_received == 0)
-                std::cout << "🔌 Sender disconnected" << std::endl;
-            else
-                std::cerr << "❌ Error receiving frame size" << std::endl;
-            break;
-        }
-
-        uint32_t frame_size = ntohl(net_frame_size);
-
-        // Validate frame size
-        if (frame_size != frame.size())
-        {
-            std::cerr << "❌ Invalid frame size: " << frame_size
-                      << " (expected " << frame.size() << ")" << std::endl;
-            break;
-        }
-
-        /**
-         * Receive frame data
-         * Handle partial receives until complete frame is received
-         */
-        size_t total_received = 0;
-        while (total_received < frame_size)
-        {
-            bytes_received = recv(client_sock,
-                                  (char *)frame.data() + total_received,
-                                  frame_size - total_received, 0);
-
-            if (bytes_received <= 0)
-            {
-                std::cerr << "❌ Error receiving frame data" << std::endl;
-                streaming = false;
-                break;
-            }
-
-            total_received += bytes_received;
-        }
-
         if (!streaming)
             break;
 
-        /**
-         * Update texture and render
-         * The texture maintains the original resolution,
-         * the renderer scales it to window size
-         */
-        SDL_UpdateTexture(texture, NULL, frame.data(),
-                          SCREEN_WIDTH * BYTES_PER_PIXEL);
-
-        SDL_RenderClear(renderer);
-        SDL_RenderCopy(renderer, texture, NULL, NULL);
-        SDL_RenderPresent(renderer);
-
-        frames_received++;
-
-        // Show statistics every 100 frames
-        if (frames_received % 100 == 0)
+        /* 4-byte size header */
+        uint32_t net_sz = 0;
+        int n = (int)recv(client, (char *)&net_sz, 4, 0);
+        if (n <= 0)
         {
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                               now - start_time)
-                               .count();
+            if (n == 0)
+                std::cout << "Sender disconnected\n";
+            else
+                std::cerr << "Recv error (size)\n";
+            break;
+        }
+        uint32_t frame_sz = ntohl(net_sz);
+        if (frame_sz == 0 || frame_sz > MAX_FRAME_BYTES)
+        {
+            std::cerr << "Bad frame size: " << frame_sz << "\n";
+            break;
+        }
 
-            if (elapsed > 0)
+        /* Frame data */
+        frame.resize(frame_sz);
+        size_t got = 0;
+        while (got < frame_sz)
+        {
+            n = (int)recv(client, (char *)frame.data() + got,
+                          (int)(frame_sz - got), 0);
+            if (n <= 0)
             {
-                float fps = frames_received / (float)elapsed;
-                std::cout << "📊 Frames: " << frames_received
-                          << " | FPS: " << std::fixed << std::setprecision(1) << fps
-                          << " | Resolution: " << SCREEN_WIDTH << "x" << SCREEN_HEIGHT << std::endl;
+                streaming = false;
+                break;
             }
+            got += (size_t)n;
+        }
+        if (!streaming)
+            break;
+
+        /*
+         * RLE decompression
+         * If the frame is smaller than a raw RGB frame it was RLE-compressed
+         * by the GPU service. Decompress: stream of [run r g b] tuples.
+         */
+        if (frame_sz < (uint32_t)full_frame)
+        {
+            std::vector<uint8_t> dec;
+            dec.reserve(full_frame);
+            const uint8_t *src = frame.data();
+            const uint8_t *end = src + frame_sz;
+            while (src + 3 < end && dec.size() < full_frame)
+            {
+                uint8_t run = *src++;
+                uint8_t r = *src++;
+                uint8_t g = *src++;
+                uint8_t b = *src++;
+                for (uint8_t j = 0;
+                     j < run && dec.size() + 3 <= full_frame; j++)
+                {
+                    dec.push_back(r);
+                    dec.push_back(g);
+                    dec.push_back(b);
+                }
+            }
+            while (dec.size() < full_frame)
+                dec.push_back(0);
+            frame = std::move(dec);
+        }
+
+        /* Render */
+        SDL_UpdateTexture(tex, nullptr, frame.data(),
+                          SCREEN_WIDTH * BYTES_PER_PIXEL);
+        SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+        SDL_RenderClear(ren);
+        SDL_RenderCopy(ren, tex, nullptr, nullptr);
+
+        /* Re-draw edge glow on top of each frame in extend mode */
+        if (DISPLAY_MODE == MODE_EXTEND_RIGHT)
+        {
+            SDL_SetRenderDrawColor(ren, 0, 140, 255, 120);
+            SDL_RenderDrawLine(ren, 0, 0, 0, MY_DISPLAY_HEIGHT - 1);
+            SDL_RenderDrawLine(ren, 1, 0, 1, MY_DISPLAY_HEIGHT - 1);
+        }
+        else if (DISPLAY_MODE == MODE_EXTEND_BELOW)
+        {
+            SDL_SetRenderDrawColor(ren, 0, 140, 255, 120);
+            SDL_RenderDrawLine(ren, 0, 0, MY_DISPLAY_WIDTH - 1, 0);
+            SDL_RenderDrawLine(ren, 0, 1, MY_DISPLAY_WIDTH - 1, 1);
+        }
+
+        SDL_RenderPresent(ren);
+        frames_rx++;
+
+        if (frames_rx % 100 == 0)
+        {
+            auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                            std::chrono::steady_clock::now() - start_time)
+                            .count();
+            if (secs > 0)
+                std::cout << "Frames: " << frames_rx
+                          << "  FPS: " << std::fixed << std::setprecision(1)
+                          << (float)frames_rx / (float)secs
+                          << "  (" << modeStr << ")\n";
         }
     }
 
-    // Display final statistics
-    auto end_time = std::chrono::steady_clock::now();
-    auto total_seconds = std::chrono::duration_cast<std::chrono::seconds>(
-                             end_time - start_time)
-                             .count();
+    /* Summary */
+    auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::steady_clock::now() - start_time)
+                    .count();
+    std::cout << "========================================\n"
+              << "  RECEIVER SESSION\n"
+              << "========================================\n"
+              << "  Mode     : " << modeStr << "\n"
+              << "  Src res  : " << SCREEN_WIDTH << "x" << SCREEN_HEIGHT << "\n"
+              << "  My res   : " << MY_DISPLAY_WIDTH << "x" << MY_DISPLAY_HEIGHT << "\n"
+              << "  Frames   : " << frames_rx << "\n"
+              << "  Duration : " << secs << " s\n";
+    if (secs > 0)
+        std::cout << "  Avg FPS  : " << frames_rx / secs << "\n";
+    std::cout << "========================================\n";
 
-    std::cout << "========================================" << std::endl;
-    std::cout << "📊 RECEIVER STATISTICS" << std::endl;
-    std::cout << "========================================" << std::endl;
-    std::cout << "Resolution:      " << SCREEN_WIDTH << "x" << SCREEN_HEIGHT << std::endl;
-    std::cout << "Frames received: " << frames_received << std::endl;
-    std::cout << "Duration:        " << total_seconds << " seconds" << std::endl;
-    if (total_seconds > 0)
-    {
-        std::cout << "Average FPS:     " << (frames_received / total_seconds) << std::endl;
-    }
-    std::cout << "========================================" << std::endl;
-
-    // Cleanup SDL resources
-    SDL_DestroyTexture(texture);
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
+    SDL_DestroyTexture(tex);
+    SDL_DestroyRenderer(ren);
+    SDL_DestroyWindow(win);
     SDL_Quit();
-
     return true;
 }
 
-/**
- * Main function
- *
- * Sets up the receiver:
- * 1. Starts SSDP advertisement thread
- * 2. Creates TCP server socket
- * 3. Waits for sender connections
- * 4. Handles each connection
- */
+/* ══════════════════════════════════════════════════════════════════════════
+ * MAIN
+ * ══════════════════════════════════════════════════════════════════════════ */
 int main()
 {
-    std::cout << "========================================" << std::endl;
-    std::cout << "📺 RGM RECEIVER v2.0" << std::endl;
-    std::cout << "========================================" << std::endl;
-    std::cout << "Local IP: " << getLocalIPAddress() << std::endl;
-    std::cout << "TCP Port: " << TCP_STREAM_PORT << std::endl;
-    std::cout << "SSDP:     " << SSDP_ADDRESS << ":" << SSDP_PORT << std::endl;
-    std::cout << "Resolution will be auto-detected from sender" << std::endl;
-    std::cout << "========================================" << std::endl;
+#ifdef _WIN32
+    SetConsoleCtrlHandler(consoleHandler, TRUE);
+#else
+    struct sigaction sa = {};
+    sa.sa_handler = sigHandler;
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
+#endif
 
-    // Initialize network sockets
+    showSplashScreen();
+    queryMyDisplaySize();
+
+    std::cout << "========================================\n"
+              << "  RGM RECEIVER v2.0  –  Screen Extender\n"
+              << "========================================\n"
+              << "  Local IP   : " << getLocalIPAddress() << "\n"
+              << "  My display : " << MY_DISPLAY_WIDTH
+              << "x" << MY_DISPLAY_HEIGHT << "\n"
+              << "  Stream TCP : " << TCP_STREAM_PORT << "\n"
+              << "  GPU TCP    : " << GPU_ACCEL_PORT << "\n"
+              << "  SSDP UDP   : " << SSDP_ADDR << ":" << SSDP_PORT << "\n"
+              << "  Modes      : extend-right | extend-below | mirror\n"
+              << "========================================\n";
+
     if (!initSockets())
     {
-        std::cerr << "❌ Failed to initialize sockets" << std::endl;
+        std::cerr << "Socket init failed\n";
         return 1;
     }
 
-    // Start SSDP advertisement thread
+    std::thread gpu_thread(gpuServiceThread);
     std::thread ssdp_thread(ssdpAdvertisementThread);
 
-    // Create TCP server socket
-#ifdef _WIN32
-    SOCKET server_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_sock == INVALID_SOCKET)
+    /* TCP stream server */
+    plat_sock_t srv = socket(AF_INET, SOCK_STREAM, 0);
+    if (!PLAT_VALID(srv))
     {
-        std::cerr << "❌ Failed to create server socket" << std::endl;
-        cleanupSockets();
-        return 1;
-    }
-#else
-    int server_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_sock < 0)
-    {
-        std::cerr << "❌ Failed to create server socket" << std::endl;
-        cleanupSockets();
-        return 1;
-    }
-#endif
-
-    // Allow address reuse
-    int reuse = 1;
-    if (setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR,
-                   (char *)&reuse, sizeof(reuse)) < 0)
-    {
-        std::cerr << "⚠️  Failed to set SO_REUSEADDR" << std::endl;
-    }
-
-    // Set socket buffer size
-    int sock_buf_size = SOCKET_BUFFER_SIZE;
-    setsockopt(server_sock, SOL_SOCKET, SO_RCVBUF, (char *)&sock_buf_size, sizeof(sock_buf_size));
-
-    // Bind to TCP port
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(TCP_STREAM_PORT);
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-
-    if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-    {
-        std::cerr << "❌ Failed to bind to port " << TCP_STREAM_PORT << std::endl;
-#ifdef _WIN32
-        closesocket(server_sock);
-#else
-        close(server_sock);
-#endif
+        std::cerr << "Server socket failed\n";
+        g_running = false;
+        ssdp_thread.join();
+        gpu_thread.join();
         cleanupSockets();
         return 1;
     }
 
-    // Start listening
-    if (listen(server_sock, 5) < 0)
+    int reuse = 1, sb = SOCK_BUF;
+    setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(reuse));
+    setsockopt(srv, SOL_SOCKET, SO_RCVBUF, (char *)&sb, sizeof(sb));
+
+    struct sockaddr_in saddr = {};
+    saddr.sin_family = AF_INET;
+    saddr.sin_port = htons(TCP_STREAM_PORT);
+    saddr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(srv, (struct sockaddr *)&saddr, sizeof(saddr)) < 0)
     {
-        std::cerr << "❌ Failed to listen on socket" << std::endl;
-#ifdef _WIN32
-        closesocket(server_sock);
-#else
-        close(server_sock);
-#endif
+        std::cerr << "Bind failed on " << TCP_STREAM_PORT << "\n";
+        PLAT_CLOSE(srv);
+        g_running = false;
+        ssdp_thread.join();
+        gpu_thread.join();
         cleanupSockets();
         return 1;
     }
+    listen(srv, 5);
+    std::cout << "Waiting for sender on TCP " << TCP_STREAM_PORT << " ...\n";
 
-    std::cout << "⏳ Waiting for sender connection on port "
-              << TCP_STREAM_PORT << "..." << std::endl;
-
-    /**
-     * Main accept loop
-     * Uses select() for non-blocking accept with timeout
-     */
     while (g_running)
     {
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        FD_SET(server_sock, &readfds);
-
-        struct timeval tv;
-        tv.tv_sec = 1;
-        tv.tv_usec = 0;
-
-        int activity = select(server_sock + 1, &readfds, NULL, NULL, &tv);
-
-        if (!g_running)
+        fd_set fds;
+        FD_ZERO(&fds);
+        FD_SET(srv, &fds);
+        struct timeval tv = {1, 0};
+        int act = select((int)srv + 1, &fds, nullptr, nullptr, &tv);
+        if (act < 0 || !g_running)
             break;
-
-        if (activity < 0)
-        {
-            std::cerr << "❌ Select error" << std::endl;
+        if (act == 0)
             continue;
-        }
 
-        if (activity == 0)
-            continue; // Timeout, check g_running again
-
-        // Accept new connection
-        struct sockaddr_in client_addr;
-        socklen_t client_len = sizeof(client_addr);
-
-#ifdef _WIN32
-        SOCKET client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_len);
-        if (client_sock == INVALID_SOCKET)
-#else
-        int client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_len);
-        if (client_sock < 0)
-#endif
-        {
-            std::cerr << "❌ Failed to accept connection" << std::endl;
+        struct sockaddr_in cli = {};
+        ACCEPT_LEN_T cli_len = sizeof(cli);
+        plat_sock_t client = accept(srv, (struct sockaddr *)&cli,
+                                    (ACCEPT_LEN_T *)&cli_len);
+        if (!PLAT_VALID(client))
             continue;
-        }
 
-        std::cout << "✅ Sender connected from "
-                  << inet_ntoa(client_addr.sin_addr) << std::endl;
-
-        // Handle the connection
-        handleClientConnection(client_sock);
-
-        // Close client socket
-#ifdef _WIN32
-        closesocket(client_sock);
-#else
-        close(client_sock);
-#endif
-
-        std::cout << "⏳ Waiting for next sender..." << std::endl;
+        std::cout << "Sender connected: " << inet_ntoa(cli.sin_addr) << "\n";
+        handleClientConnection(client);
+        PLAT_CLOSE(client);
+        if (g_running)
+            std::cout << "Waiting for next sender...\n";
     }
 
-    // Cleanup
-#ifdef _WIN32
-    closesocket(server_sock);
-#else
-    close(server_sock);
-#endif
-
-    g_running = false;
+    PLAT_CLOSE(srv);
+    g_running = false; /* signal threads before joining */
     ssdp_thread.join();
+    gpu_thread.join();
     cleanupSockets();
-
-    std::cout << "📺 Receiver shut down" << std::endl;
+    std::cout << "Receiver shut down\n";
     return 0;
 }

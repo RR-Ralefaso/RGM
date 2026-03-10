@@ -1,8 +1,38 @@
 /**
- * SENDER.CPP - SCREEN CAPTURE AND STREAMING
+ * SENDER.CPP - SCREEN CAPTURE, STREAMING, AND VIRTUAL DISPLAY EXTENSION
  *
- * This module handles screen capture and streaming to a receiver.
- * It automatically detects screen resolution and streams at high quality.
+ * Cross-platform: Windows (GDI), Linux (X11), macOS (CoreGraphics).
+ *
+ * Screen Extender Mode
+ * --------------------
+ * Instead of mirroring, the receiver is treated as a second monitor placed
+ * to the RIGHT of the sender's display. The receiver opens a borderless
+ * fullscreen window at its own (0,0), presenting as a natural extension.
+ *
+ * Handshake (sender → receiver):
+ *   uint32_t  sender_width     – sender screen width
+ *   uint32_t  sender_height    – sender screen height
+ *   uint32_t  fps              – target frame rate
+ *   uint32_t  mode             – 0=mirror  1=extend_right  2=extend_below
+ *
+ * Handshake response (receiver → sender):
+ *   uint32_t  receiver_width   – receiver display width
+ *   uint32_t  receiver_height  – receiver display height
+ *   uint32_t  status           – 0=ok
+ *
+ * After the handshake the sender streams frames exactly as before.
+ * In extend_right mode the sender also registers a virtual desktop offset
+ * so that OS-level pointer warp (optional, per platform) can move the
+ * mouse to the receiver screen edge naturally.
+ *
+ * Platform notes
+ * --------------
+ * Windows : GDI capture; Winsock2; SDL2+SDL_image splash.
+ * Linux   : X11 capture; POSIX sockets. Wayland: set WAYLAND_DISPLAY="".
+ * macOS   : CoreGraphics capture; POSIX sockets.
+ *           Link: -framework CoreGraphics -framework CoreFoundation
+ *
+ * Build deps: SDL2, SDL2_image, X11 (Linux), pthreads
  */
 
 #include <iostream>
@@ -13,705 +43,710 @@
 #include <atomic>
 #include <iomanip>
 #include <fstream>
+#include <cstdint>
+#include <algorithm>
 #include "discover.h"
+#include "gpu_accelerate.h"
 
+/* ── Platform headers ───────────────────────────────────────────────────── */
 #ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
-#include <mstcpip.h>
-#pragma comment(lib, "ws2_32.lib")
-#else
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
-#include <SDL2/SDL.h> // For splash screen
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#  include <windows.h>
+#  include <mstcpip.h>
+#  pragma comment(lib, "ws2_32.lib")
+#elif defined(__APPLE__)
+#  include <sys/socket.h>
+#  include <netinet/in.h>
+#  include <netinet/tcp.h>
+#  include <arpa/inet.h>
+#  include <unistd.h>
+#  include <fcntl.h>
+#  include <errno.h>
+#  include <CoreGraphics/CoreGraphics.h>
+#else  /* Linux */
+#  include <sys/socket.h>
+#  include <netinet/in.h>
+#  include <netinet/tcp.h>
+#  include <arpa/inet.h>
+#  include <unistd.h>
+#  include <fcntl.h>
+#  include <errno.h>
+#  include <X11/Xlib.h>
+#  include <X11/Xutil.h>
 #endif
 
-// Constants - easily modifiable for future upgrades
-#define BYTES_PER_PIXEL 3                              // RGB format (can be changed to RGBA=4 for alpha channel)
-#define CONNECTION_TIMEOUT_MS 5000                     // Connection timeout in milliseconds
-#define STATS_INTERVAL_SEC 5                           // Statistics display interval
-#define MAX_FRAME_SKIP 3                               // Maximum frames to skip when overloaded
-static const int SOCKET_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB socket buffer for high FPS
+#include <SDL2/SDL.h>
+/* SDL2_image: required for rcorp.jpeg splash (install libsdl2-image-dev) */
+#if __has_include(<SDL2/SDL_image.h>)
+#  include <SDL2/SDL_image.h>
+#  define HAVE_SDL_IMAGE 1
+#else
+#  define HAVE_SDL_IMAGE 0
+#  warning "SDL2_image not found – splash will use fallback rectangle."
+#  warning "Fix: sudo apt install libsdl2-image-dev  (or: make install-sdl2-image)"
+#endif   /* PNG + JPEG support */
 
-// Global variables for screen dimensions
-int SCREEN_WIDTH = 1920;  // Default, will be updated
-int SCREEN_HEIGHT = 1080; // Default, will be updated
-int TARGET_FPS = 60;      // Target FPS (can be made adjustable in future)
+/* ── Display mode ───────────────────────────────────────────────────────── */
+#define MODE_MIRROR        0u
+#define MODE_EXTEND_RIGHT  1u
+#define MODE_EXTEND_BELOW  2u
 
-// Global flag for running state (atomic for thread safety)
-std::atomic<bool> g_running{true};
+/* ── Constants ──────────────────────────────────────────────────────────── */
+#define BYTES_PER_PIXEL       3
+#define CONNECTION_TIMEOUT_MS 5000
+#define STATS_INTERVAL_SEC    5
+#define MAX_FRAME_SKIP        3
+#define MAX_FRAME_BYTES       (7680u * 4320u * 3u)
 
-/**
- * Display RGM splash screen using SDL2
- * Shows the RGM.png image when the software starts
- */
-void showSplashScreen()
+static const int SOCK_BUF = 4 * 1024 * 1024;
+
+/* ── ANSI colours (Windows CMD does not support VT100 by default) ────────── */
+#ifdef _WIN32
+#  define COL_RESET   ""
+#  define COL_RED     ""
+#  define COL_GREEN   ""
+#  define COL_YELLOW  ""
+#  define COL_CYAN    ""
+#  define COL_MAGENTA ""
+#  define COL_BOLD    ""
+#else
+#  define COL_RESET   "\033[0m"
+#  define COL_RED     "\033[31m"
+#  define COL_GREEN   "\033[32m"
+#  define COL_YELLOW  "\033[33m"
+#  define COL_CYAN    "\033[36m"
+#  define COL_MAGENTA "\033[35m"
+#  define COL_BOLD    "\033[1m"
+#endif
+
+/* ── Globals ─────────────────────────────────────────────────────────────── */
+static int SCREEN_WIDTH  = 1920;
+static int SCREEN_HEIGHT = 1080;
+static int TARGET_FPS    = 60;
+static uint32_t DISPLAY_MODE = MODE_EXTEND_RIGHT;  /* default: extend */
+
+/* Receiver display dimensions (filled after handshake response) */
+static int RECV_WIDTH  = 1920;
+static int RECV_HEIGHT = 1080;
+
+static std::atomic<bool> g_running{true};
+
+/* GPU offload */
+static gpu_sock_t g_gpu_sock   = GPU_INVALID_SOCK;
+static bool       g_gpu_active = false;
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * SPLASH SCREEN  –  rcorp.jpeg preferred, RGM.png fallback
+ * ══════════════════════════════════════════════════════════════════════════ */
+static void showSplashScreen()
 {
-    std::cout << "🎬 Initializing RGM..." << std::endl;
+    std::cout << COL_CYAN << COL_BOLD
+              << "========================================\n"
+                 "  RGM SENDER v2.0\n"
+                 "========================================\n"
+              << COL_RESET;
 
-    // Initialize SDL with video support only
-    if (SDL_Init(SDL_INIT_VIDEO) < 0)
-    {
-        std::cerr << "⚠️  Could not initialize SDL for splash screen: " << SDL_GetError() << std::endl;
-        return; // Non-critical, continue without splash
-    }
-
-    // Create a splash window (always on top, no border)
-    SDL_Window *splashWindow = SDL_CreateWindow(
-        "RGM",
-        SDL_WINDOWPOS_CENTERED,
-        SDL_WINDOWPOS_CENTERED,
-        400, 300, // Splash screen size
-        SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALWAYS_ON_TOP);
-
-    if (!splashWindow)
-    {
-        std::cerr << "⚠️  Could not create splash window: " << SDL_GetError() << std::endl;
-        SDL_Quit();
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+        std::cerr << COL_YELLOW << "Splash: SDL_Init: "
+                  << SDL_GetError() << COL_RESET << "\n";
         return;
     }
 
-    // Create renderer for the splash window
-    SDL_Renderer *splashRenderer = SDL_CreateRenderer(splashWindow, -1,
-                                                      SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    /* Enable PNG + JPEG loading via SDL_image */
+#if HAVE_SDL_IMAGE
+    int img_flags = IMG_INIT_PNG | IMG_INIT_JPG;
+    if ((IMG_Init(img_flags) & img_flags) != img_flags)
+        std::cerr << COL_YELLOW << "Splash: SDL_image partial init\n" << COL_RESET;
+#endif
 
-    if (!splashRenderer)
-    {
-        std::cerr << "⚠️  Could not create splash renderer: " << SDL_GetError() << std::endl;
-        SDL_DestroyWindow(splashWindow);
-        SDL_Quit();
-        return;
+    SDL_Window *win = SDL_CreateWindow(
+        "RGM", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        480, 300, SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALWAYS_ON_TOP);
+    if (!win) {
+#if HAVE_SDL_IMAGE
+        IMG_Quit();
+#endif
+        SDL_Quit(); return;
     }
 
-    // Try to load RGM.png from various possible locations
-    SDL_Surface *image = nullptr;
-    const char *possiblePaths[] = {
-        "../assets/icons/rcorp.jpeg",
-        "./assets/icons/RGM.png",
+    SDL_Renderer *ren = SDL_CreateRenderer(win, -1, SDL_RENDERER_ACCELERATED);
+    if (!ren) {
+        SDL_DestroyWindow(win);
+#if HAVE_SDL_IMAGE
+        IMG_Quit();
+#endif
+        SDL_Quit(); return;
+    }
+
+    /* Dark background */
+    SDL_SetRenderDrawColor(ren, 12, 12, 20, 255);
+    SDL_RenderClear(ren);
+
+    /*
+     * Search order: rcorp.jpeg FIRST (brand logo), then RGM.png fallback.
+     * Paths cover: running from project root, from build/, and installed.
+     */
+    const char *paths[] = {
+        "../assets/icons/rcorp.jpeg",    /* running from build/     */
+        "assets/icons/rcorp.jpeg",       /* running from project root */
+        "../assets/icons/RGM.png",
+        "assets/icons/RGM.png",
+#ifndef _WIN32
+        "/usr/share/rgm/icons/rcorp.jpeg",
         "/usr/share/rgm/icons/RGM.png",
-        nullptr};
+#endif
+        nullptr
+    };
 
-    for (int i = 0; possiblePaths[i] != nullptr && !image; i++)
-    {
-        std::ifstream file(possiblePaths[i]);
-        if (file.good())
-        {
-            file.close();
-            image = SDL_LoadBMP(possiblePaths[i]);
-            if (image)
-            {
-                std::cout << "✅ Loaded RGM logo from: " << possiblePaths[i] << std::endl;
-            }
+    SDL_Surface *img = nullptr;
+#if HAVE_SDL_IMAGE
+    for (int i = 0; paths[i] && !img; i++) {
+        img = IMG_Load(paths[i]);     /* handles JPEG and PNG natively */
+        if (img)
+            std::cout << COL_GREEN << "Splash: " << paths[i]
+                      << COL_RESET << "\n";
+    }
+#endif
+
+    if (!img) {
+        /* Fallback: rcorp-styled blue rectangle */
+        SDL_SetRenderDrawColor(ren, 20, 60, 140, 255);
+        SDL_Rect fill = {30, 30, 420, 240};  SDL_RenderFillRect(ren, &fill);
+        SDL_SetRenderDrawColor(ren, 0, 180, 255, 255);
+        SDL_Rect border = {28, 28, 424, 244}; SDL_RenderDrawRect(ren, &border);
+    } else {
+        SDL_Texture *tex = SDL_CreateTextureFromSurface(ren, img);
+        SDL_FreeSurface(img);
+        if (tex) {
+            int tw, th;
+            SDL_QueryTexture(tex, nullptr, nullptr, &tw, &th);
+            /* Scale to fit 460×280 keeping aspect ratio */
+            float sc = std::min(460.0f / (float)tw, 280.0f / (float)th);
+            SDL_Rect dst;
+            dst.w = (int)(tw * sc);  dst.h = (int)(th * sc);
+            dst.x = (480 - dst.w) / 2;
+            dst.y = (300 - dst.h) / 2;
+            SDL_RenderCopy(ren, tex, nullptr, &dst);
+            SDL_DestroyTexture(tex);
         }
     }
 
-    // If no image found, create a colored rectangle as fallback
-    if (!image)
-    {
-        std::cout << "ℹ️  RGM.png not found, using default splash" << std::endl;
-        image = SDL_CreateRGBSurface(0, 380, 280, 32, 0, 0, 0, 0);
-        if (image)
-        {
-            SDL_FillRect(image, NULL, SDL_MapRGB(image->format, 70, 130, 180)); // Steel blue
-        }
-    }
+    SDL_RenderPresent(ren);
+    SDL_Delay(2200);
 
-    if (image)
-    {
-        SDL_Texture *texture = SDL_CreateTextureFromSurface(splashRenderer, image);
-        if (texture)
-        {
-            // Clear renderer and copy texture
-            SDL_RenderClear(splashRenderer);
-            SDL_RenderCopy(splashRenderer, texture, NULL, NULL);
-            SDL_RenderPresent(splashRenderer);
-
-            // Display for 2 seconds
-            SDL_Delay(2000);
-
-            SDL_DestroyTexture(texture);
-        }
-        SDL_FreeSurface(image);
-    }
-
-    // Cleanup SDL resources
-    SDL_DestroyRenderer(splashRenderer);
-    SDL_DestroyWindow(splashWindow);
+    SDL_DestroyRenderer(ren);
+    SDL_DestroyWindow(win);
+#if HAVE_SDL_IMAGE
+    IMG_Quit();
+#endif
     SDL_Quit();
-
-    std::cout << "✅ Splash screen completed" << std::endl;
 }
 
-/**
- * Get screen dimensions - platform specific
- */
-void getScreenDimensions(int &width, int &height)
+/* ══════════════════════════════════════════════════════════════════════════
+ * SCREEN DIMENSIONS
+ * ══════════════════════════════════════════════════════════════════════════ */
+static void getScreenDimensions(int &w, int &h)
 {
 #ifdef _WIN32
-    // Windows: Use GetSystemMetrics for primary monitor
-    width = GetSystemMetrics(SM_CXSCREEN);
-    height = GetSystemMetrics(SM_CYSCREEN);
-    std::cout << "🖥️  Detected Windows display: " << width << "x" << height << std::endl;
-#else
-    // Linux: Use X11 to get display dimensions
-    Display *display = XOpenDisplay(NULL);
-    if (display)
-    {
-        int screen_num = DefaultScreen(display);
-        width = DisplayWidth(display, screen_num);
-        height = DisplayHeight(display, screen_num);
-        XCloseDisplay(display);
-        std::cout << "🖥️  Detected X11 display: " << width << "x" << height << std::endl;
+    w = GetSystemMetrics(SM_CXSCREEN);
+    h = GetSystemMetrics(SM_CYSCREEN);
+    std::cout << "Display: " << w << "x" << h << " (GDI)\n";
+
+#elif defined(__APPLE__)
+    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(kCGDirectMainDisplay);
+    if (mode) {
+        w = (int)CGDisplayModeGetWidth(mode);
+        h = (int)CGDisplayModeGetHeight(mode);
+        CGDisplayModeRelease(mode);
+        std::cout << "Display: " << w << "x" << h << " (CoreGraphics)\n";
+    } else {
+        w = 1920; h = 1080;
+        std::cerr << COL_YELLOW
+                  << "CoreGraphics query failed; using 1920x1080\n"
+                  << COL_RESET;
     }
-    else
-    {
-        // Fallback if X11 fails
-        width = 1920;
-        height = 1080;
-        std::cerr << "⚠️  Could not detect screen dimensions, using 1920x1080" << std::endl;
+
+#else   /* Linux / X11 */
+    Display *dpy = XOpenDisplay(nullptr);
+    if (dpy) {
+        int sn = DefaultScreen(dpy);
+        w = DisplayWidth(dpy, sn);
+        h = DisplayHeight(dpy, sn);
+        XCloseDisplay(dpy);
+        std::cout << "Display: " << w << "x" << h << " (X11)\n";
+    } else {
+        w = 1920; h = 1080;
+        std::cerr << COL_YELLOW
+                  << "X11 open failed; defaulting to 1920x1080\n"
+                  << COL_RESET;
     }
 #endif
 }
 
-/**
- * Network socket class with improved error handling
- * Encapsulates all socket operations for easy maintenance
- */
+/* ══════════════════════════════════════════════════════════════════════════
+ * NETWORK SOCKET
+ * ══════════════════════════════════════════════════════════════════════════ */
 class NetworkSocket
 {
-private:
 #ifdef _WIN32
-    SOCKET sock; // Windows socket handle
+    SOCKET _s = INVALID_SOCKET;
+    bool valid()    const { return _s != INVALID_SOCKET; }
+    void raw_close()      { closesocket(_s); _s = INVALID_SOCKET; }
 #else
-    int sock; // POSIX socket descriptor
+    int _s = -1;
+    bool valid()    const { return _s >= 0; }
+    void raw_close()      { ::close(_s); _s = -1; }
 #endif
 
 public:
-    // Constructor - initializes socket to invalid state
-    NetworkSocket() : sock(-1) {}
+    ~NetworkSocket() { close(); }
 
-    // Destructor - ensures socket is closed
-    ~NetworkSocket()
-    {
+    void close() { if (valid()) raw_close(); }
+
+    bool create() {
         close();
-    }
-
-    // Check if socket is valid
-    bool isValid() const
-    {
+        _s = socket(AF_INET, SOCK_STREAM, 0);
 #ifdef _WIN32
-        return sock != INVALID_SOCKET;
+        return _s != INVALID_SOCKET;
 #else
-        return sock >= 0;
+        return _s >= 0;
 #endif
     }
 
-    // Close socket if open
-    void close()
+    bool connect(const std::string &ip, int port,
+                 int timeout_ms = CONNECTION_TIMEOUT_MS)
     {
-        if (isValid())
-        {
-#ifdef _WIN32
-            closesocket(sock);
-            sock = INVALID_SOCKET;
-#else
-            ::close(sock);
-            sock = -1;
-#endif
-        }
-    }
+        if (!create()) return false;
 
-    // Create a new TCP socket
-    bool create()
-    {
-        close(); // Close any existing socket
-
-#ifdef _WIN32
-        sock = socket(AF_INET, SOCK_STREAM, 0);
-        return sock != INVALID_SOCKET;
-#else
-        sock = socket(AF_INET, SOCK_STREAM, 0);
-        return sock >= 0;
-#endif
-    }
-
-    /**
-     * Connect to a remote host with timeout
-     */
-    bool connect(const std::string &ip, int port, int timeout_ms = CONNECTION_TIMEOUT_MS)
-    {
-        if (!create())
-        {
-            std::cerr << "❌ Failed to create socket" << std::endl;
-            return false;
-        }
-
-        struct sockaddr_in addr;
-        memset(&addr, 0, sizeof(addr));
+        struct sockaddr_in addr = {};
         addr.sin_family = AF_INET;
-        addr.sin_port = htons(port);
-
-        // Convert IP string to binary
-        if (inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) <= 0)
-        {
-            std::cerr << "❌ Invalid IP address: " << ip << std::endl;
+        addr.sin_port   = htons((uint16_t)port);
+        if (inet_pton(AF_INET, ip.c_str(), &addr.sin_addr) != 1) {
+            std::cerr << COL_RED << "Invalid IP: " << ip << COL_RESET << "\n";
             return false;
         }
 
-        // Set socket to non-blocking for timeout support
+        /* Non-blocking connect with timeout */
 #ifdef _WIN32
-        u_long mode = 1;
-        ioctlsocket(sock, FIONBIO, &mode);
+        u_long nb = 1; ioctlsocket(_s, FIONBIO, &nb);
 #else
-        int flags = fcntl(sock, F_GETFL, 0);
-        fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+        int fl = fcntl(_s, F_GETFL, 0);
+        fcntl(_s, F_SETFL, fl | O_NONBLOCK);
 #endif
+        ::connect(_s, (struct sockaddr *)&addr, sizeof(addr));
 
-        // Initiate non-blocking connection
-        int result = ::connect(sock, (struct sockaddr *)&addr, sizeof(addr));
-
-        bool connected = false;
-
-        // Check if connection is in progress
-#ifdef _WIN32
-        if (result == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK)
-#else
-        if (result < 0 && errno == EINPROGRESS)
-#endif
-        {
-            fd_set fdset;
-            FD_ZERO(&fdset);
-            FD_SET(sock, &fdset);
-
-            struct timeval tv;
-            tv.tv_sec = timeout_ms / 1000;
-            tv.tv_usec = (timeout_ms % 1000) * 1000;
-
-            // Wait for connection to complete
-            if (select(sock + 1, NULL, &fdset, NULL, &tv) == 1)
-            {
-                int so_error;
-                socklen_t len = sizeof(so_error);
-                getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&so_error, &len);
-
-                if (so_error == 0)
-                    connected = true;
-            }
+        fd_set fds; FD_ZERO(&fds); FD_SET(_s, &fds);
+        struct timeval tv = { timeout_ms / 1000,
+                              (timeout_ms % 1000) * 1000 };
+        bool ok = false;
+        if (select((int)_s + 1, nullptr, &fds, nullptr, &tv) == 1) {
+            int err = 0; socklen_t len = sizeof(err);
+            getsockopt(_s, SOL_SOCKET, SO_ERROR, (char *)&err, &len);
+            ok = (err == 0);
         }
 
-        // Restore blocking mode
 #ifdef _WIN32
-        mode = 0;
-        ioctlsocket(sock, FIONBIO, &mode);
+        { u_long bl = 0; ioctlsocket(_s, FIONBIO, &bl); }
 #else
-        fcntl(sock, F_SETFL, flags);
+        fcntl(_s, F_SETFL, fl);
 #endif
-
-        if (!connected)
-        {
-            std::cerr << "❌ Connection timeout to " << ip << ":" << port << std::endl;
-            close();
-            return false;
+        if (!ok) {
+            std::cerr << COL_RED << "Timeout: " << ip << ":"
+                      << port << COL_RESET << "\n";
+            close(); return false;
         }
 
-        // Enable TCP_NODELAY to disable Nagle's algorithm (reduces latency)
-        int nodelay = 1;
-        if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (char *)&nodelay, sizeof(nodelay)) < 0)
-        {
-            std::cerr << "⚠️  Warning: Could not set TCP_NODELAY" << std::endl;
-        }
-
-        // Increase socket buffer size for high FPS streaming
-        int sock_buf_size = SOCKET_BUFFER_SIZE;
-        setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (char *)&sock_buf_size, sizeof(sock_buf_size));
-
-        std::cout << "✅ Connected to " << ip << ":" << port << std::endl;
+        int nd = 1, sb = SOCK_BUF;
+        setsockopt(_s, IPPROTO_TCP, TCP_NODELAY, (char *)&nd, sizeof(nd));
+        setsockopt(_s, SOL_SOCKET,  SO_SNDBUF,   (char *)&sb, sizeof(sb));
+        std::cout << COL_GREEN << "Connected to "
+                  << ip << ":" << port << COL_RESET << "\n";
         return true;
     }
 
-    /**
-     * Send all data reliably
-     * Handles partial sends and continues until all data is sent
-     */
-    bool sendAll(const void *data, size_t size)
-    {
-        const char *buffer = (const char *)data;
-        size_t total_sent = 0;
-
-        while (total_sent < size && g_running)
-        {
+    bool sendAll(const void *data, size_t size) {
+        const char *p = (const char *)data;
+        size_t sent = 0;
+        while (sent < size && g_running) {
+            int n = (int)send(_s, p + sent, (int)(size - sent), 0);
 #ifdef _WIN32
-            int sent = ::send(sock, buffer + total_sent, size - total_sent, 0);
-            if (sent == SOCKET_ERROR)
-            {
-                std::cerr << "❌ Send error: " << WSAGetLastError() << std::endl;
+            if (n == SOCKET_ERROR) {
+                std::cerr << COL_RED << "Send error: "
+                          << WSAGetLastError() << COL_RESET << "\n";
                 return false;
             }
 #else
-            int sent = ::send(sock, buffer + total_sent, size - total_sent, 0);
-            if (sent < 0)
-            {
-                std::cerr << "❌ Send error: " << strerror(errno) << std::endl;
+            if (n < 0) {
+                std::cerr << COL_RED << "Send error: "
+                          << strerror(errno) << COL_RESET << "\n";
                 return false;
             }
 #endif
-            if (sent == 0)
-            {
-                std::cerr << "❌ Connection closed by receiver" << std::endl;
-                return false;
-            }
-
-            total_sent += sent;
+            if (n == 0) return false;
+            sent += (size_t)n;
         }
+        return sent == size;
+    }
 
-        return total_sent == size;
+    bool recvAll(void *data, size_t size) {
+        char *p = (char *)data;
+        size_t got = 0;
+        while (got < size) {
+            int n = (int)recv(_s, p + got, (int)(size - got), 0);
+            if (n <= 0) return false;
+            got += (size_t)n;
+        }
+        return true;
     }
 };
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * SCREEN CAPTURE  –  platform-specific, always returns RGB24
+ * ══════════════════════════════════════════════════════════════════════════ */
 #ifdef _WIN32
-/**
- * Windows screen capture with high quality
- */
-std::vector<uint8_t> captureScreen()
+static std::vector<uint8_t> captureScreen()
 {
-    // Allocate pixel buffer
-    std::vector<uint8_t> pixels(SCREEN_WIDTH * SCREEN_HEIGHT * BYTES_PER_PIXEL, 0);
-
-    // Get device context for the entire screen
-    HDC screen_dc = GetDC(NULL);
-    if (!screen_dc)
-    {
-        std::cerr << "❌ Failed to get screen DC" << std::endl;
-        return pixels;
-    }
-
-    // Create compatible DC and bitmap
-    HDC mem_dc = CreateCompatibleDC(screen_dc);
-    HBITMAP bitmap = CreateCompatibleBitmap(screen_dc, SCREEN_WIDTH, SCREEN_HEIGHT);
-
-    if (!bitmap)
-    {
-        std::cerr << "❌ Failed to create bitmap" << std::endl;
-        ReleaseDC(NULL, screen_dc);
-        DeleteDC(mem_dc);
-        return pixels;
-    }
-
-    // Select bitmap into memory DC
-    SelectObject(mem_dc, bitmap);
-
-    // Capture screen with CAPTUREBLT to include layered windows
-    BitBlt(mem_dc, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, screen_dc, 0, 0, SRCCOPY | CAPTUREBLT);
-
-    // Prepare bitmap info structure
-    BITMAPINFOHEADER bi = {0};
-    bi.biSize = sizeof(BITMAPINFOHEADER);
-    bi.biWidth = SCREEN_WIDTH;
-    bi.biHeight = -SCREEN_HEIGHT; // Negative for top-down (no flipping needed)
-    bi.biPlanes = 1;
-    bi.biBitCount = 24; // 24-bit RGB
-    bi.biCompression = BI_RGB;
-
-    // Get the bitmap bits
-    int result = GetDIBits(mem_dc, bitmap, 0, SCREEN_HEIGHT,
-                           pixels.data(), (BITMAPINFO *)&bi, DIB_RGB_COLORS);
-
-    if (!result)
-    {
-        std::cerr << "❌ Failed to get bitmap bits" << std::endl;
-    }
-
-    // Cleanup
-    DeleteObject(bitmap);
-    DeleteDC(mem_dc);
-    ReleaseDC(NULL, screen_dc);
-
-    return pixels;
+    std::vector<uint8_t> px(SCREEN_WIDTH * SCREEN_HEIGHT * BYTES_PER_PIXEL, 0);
+    HDC sdc = GetDC(nullptr);
+    if (!sdc) return px;
+    HDC     mdc = CreateCompatibleDC(sdc);
+    HBITMAP bmp = CreateCompatibleBitmap(sdc, SCREEN_WIDTH, SCREEN_HEIGHT);
+    if (!bmp) { DeleteDC(mdc); ReleaseDC(nullptr, sdc); return px; }
+    SelectObject(mdc, bmp);
+    BitBlt(mdc, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, sdc, 0, 0,
+           SRCCOPY | CAPTUREBLT);
+    BITMAPINFOHEADER bi = {};
+    bi.biSize = sizeof(bi); bi.biWidth = SCREEN_WIDTH;
+    bi.biHeight = -SCREEN_HEIGHT;          /* top-down, no flip needed */
+    bi.biPlanes = 1; bi.biBitCount = 24; bi.biCompression = BI_RGB;
+    GetDIBits(mdc, bmp, 0, SCREEN_HEIGHT, px.data(),
+              (BITMAPINFO *)&bi, DIB_RGB_COLORS);
+    DeleteObject(bmp); DeleteDC(mdc); ReleaseDC(nullptr, sdc);
+    /* GDI returns BGR; swap to RGB for network transmission */
+    for (int i = 0; i < SCREEN_WIDTH * SCREEN_HEIGHT; i++)
+        std::swap(px[i*3], px[i*3+2]);
+    return px;
 }
-#else
-/**
- * Linux X11 screen capture with high quality
- */
-std::vector<uint8_t> captureScreen()
+
+#elif defined(__APPLE__)
+static std::vector<uint8_t> captureScreen()
 {
-    // Allocate pixel buffer
-    std::vector<uint8_t> pixels(SCREEN_WIDTH * SCREEN_HEIGHT * BYTES_PER_PIXEL, 0);
-
-    // Open X display
-    Display *display = XOpenDisplay(NULL);
-    if (!display)
-    {
-        std::cerr << "❌ Failed to open X display" << std::endl;
-        return pixels;
-    }
-
-    int screen_num = DefaultScreen(display);
-    Window root = RootWindow(display, screen_num);
-
-    // Capture the screen
-    XImage *image = XGetImage(display, root, 0, 0,
-                              SCREEN_WIDTH, SCREEN_HEIGHT,
-                              AllPlanes, ZPixmap);
-
-    if (!image)
-    {
-        std::cerr << "❌ Failed to capture screen" << std::endl;
-        XCloseDisplay(display);
-        return pixels;
-    }
-
-    // Convert XImage to RGB format
-    for (int y = 0; y < SCREEN_HEIGHT; y++)
-    {
-        for (int x = 0; x < SCREEN_WIDTH; x++)
-        {
-            unsigned long pixel = XGetPixel(image, x, y);
-            size_t index = (y * SCREEN_WIDTH + x) * BYTES_PER_PIXEL;
-
-            // Convert from X11 format (depends on endianness)
-#ifdef WORDS_BIGENDIAN
-            pixels[index + 0] = (pixel >> 16) & 0xFF; // Red
-            pixels[index + 1] = (pixel >> 8) & 0xFF;  // Green
-            pixels[index + 2] = pixel & 0xFF;         // Blue
-#else
-            pixels[index + 0] = pixel & 0xFF;         // Blue
-            pixels[index + 1] = (pixel >> 8) & 0xFF;  // Green
-            pixels[index + 2] = (pixel >> 16) & 0xFF; // Red
-#endif
+    std::vector<uint8_t> px(SCREEN_WIDTH * SCREEN_HEIGHT * BYTES_PER_PIXEL, 0);
+    CGImageRef img = CGDisplayCreateImage(kCGDirectMainDisplay);
+    if (!img) return px;
+    CGDataProviderRef dp  = CGImageGetDataProvider(img);
+    CFDataRef         raw = CGDataProviderCopyData(dp);
+    if (!raw) { CGImageRelease(img); return px; }
+    const uint8_t *src = CFDataGetBytePtr(raw);
+    size_t bpr = CGImageGetBytesPerRow(img);
+    size_t bpp = CGImageGetBitsPerPixel(img) / 8; /* usually 4: BGRA */
+    for (int y = 0; y < SCREEN_HEIGHT; y++) {
+        for (int x = 0; x < SCREEN_WIDTH; x++) {
+            size_t si = y * bpr + x * bpp;
+            size_t di = ((size_t)y * SCREEN_WIDTH + x) * 3;
+            px[di+0] = src[si+2]; /* R */
+            px[di+1] = src[si+1]; /* G */
+            px[di+2] = src[si+0]; /* B */
         }
     }
+    CFRelease(raw);
+    CGImageRelease(img);
+    return px;
+}
 
-    // Cleanup
-    XDestroyImage(image);
-    XCloseDisplay(display);
-
-    return pixels;
+#else   /* Linux / X11 */
+static std::vector<uint8_t> captureScreen()
+{
+    std::vector<uint8_t> px(SCREEN_WIDTH * SCREEN_HEIGHT * BYTES_PER_PIXEL, 0);
+    Display *dpy = XOpenDisplay(nullptr);
+    if (!dpy) return px;
+    Window root = RootWindow(dpy, DefaultScreen(dpy));
+    XImage *xi  = XGetImage(dpy, root, 0, 0,
+                             SCREEN_WIDTH, SCREEN_HEIGHT, AllPlanes, ZPixmap);
+    if (!xi) { XCloseDisplay(dpy); return px; }
+    for (int y = 0; y < SCREEN_HEIGHT; y++) {
+        for (int x = 0; x < SCREEN_WIDTH; x++) {
+            unsigned long p = XGetPixel(xi, x, y);
+            size_t i = ((size_t)y * SCREEN_WIDTH + x) * 3;
+            px[i+0] = (uint8_t)((p >> 16) & 0xFF); /* R */
+            px[i+1] = (uint8_t)((p >>  8) & 0xFF); /* G */
+            px[i+2] = (uint8_t)( p        & 0xFF); /* B */
+        }
+    }
+    XDestroyImage(xi);
+    XCloseDisplay(dpy);
+    return px;
 }
 #endif
 
-/**
- * Calculate and display streaming statistics
- */
-void showStats(int frames_sent, int elapsed_seconds, size_t bytes_sent)
+/* ══════════════════════════════════════════════════════════════════════════
+ * DISPLAY MODE SELECTION
+ * ══════════════════════════════════════════════════════════════════════════ */
+static uint32_t selectDisplayMode()
 {
-    if (elapsed_seconds == 0)
-        elapsed_seconds = 1;
+    std::cout << "\n"
+              << COL_CYAN << COL_BOLD
+              << "  Select display mode:\n" << COL_RESET
+              << "  " << COL_GREEN  << "1" << COL_RESET
+                      << "  Extend Right  (receiver = right monitor)\n"
+              << "  " << COL_YELLOW << "2" << COL_RESET
+                      << "  Extend Below  (receiver = bottom monitor)\n"
+              << "  " << COL_CYAN   << "3" << COL_RESET
+                      << "  Mirror        (duplicate screen)\n"
+              << COL_BOLD << "  Choice [1]: " << COL_RESET;
 
-    float fps = frames_sent / (float)elapsed_seconds;
-    float mbps = (bytes_sent / (1024.0f * 1024.0f)) / elapsed_seconds;
+    std::string line;
+    /* consume leftover newline from previous cin >> */
+    if (std::cin.peek() == '\n') std::cin.ignore();
+    std::getline(std::cin, line);
 
-    std::cout << "📊 Frames: " << frames_sent
-              << " | FPS: " << std::fixed << std::setprecision(1) << fps
-              << "/" << TARGET_FPS
-              << " | Bandwidth: " << std::setprecision(2) << mbps << " MB/s"
-              << " | Resolution: " << SCREEN_WIDTH << "x" << SCREEN_HEIGHT << std::endl;
+    if (line == "2") return MODE_EXTEND_BELOW;
+    if (line == "3") return MODE_MIRROR;
+    return MODE_EXTEND_RIGHT;     /* default */
 }
 
-/**
- * Main function
- * Handles the overall flow:
- * 1. Show splash screen
- * 2. Detect screen resolution
- * 3. Discover receivers
- * 4. Connect to selected receiver
- * 5. Stream screen captures
- */
+/* ══════════════════════════════════════════════════════════════════════════
+ * STATS
+ * ══════════════════════════════════════════════════════════════════════════ */
+static void showStats(int frames, long elapsed, size_t bytes)
+{
+    if (elapsed < 1) elapsed = 1;
+    float fps  = (float)frames / (float)elapsed;
+    float mbps = (float)(bytes / (1024.0 * 1024.0)) / (float)elapsed;
+    const char *modeStr =
+        DISPLAY_MODE == MODE_EXTEND_RIGHT  ? "extend-right"  :
+        DISPLAY_MODE == MODE_EXTEND_BELOW  ? "extend-below"  : "mirror";
+
+    std::cout << COL_CYAN
+              << "Frames: " << frames
+              << "  FPS: "  << std::fixed << std::setprecision(1) << fps
+                            << "/" << TARGET_FPS
+              << "  BW: "   << std::setprecision(2) << mbps << " MB/s"
+              << "  Src: "  << SCREEN_WIDTH  << "x" << SCREEN_HEIGHT
+              << "  Dst: "  << RECV_WIDTH    << "x" << RECV_HEIGHT
+              << "  Mode: " << modeStr
+              << (g_gpu_active ? "  GPU:remote" : "  GPU:local")
+              << COL_RESET << "\n";
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * MAIN
+ * ══════════════════════════════════════════════════════════════════════════ */
 int main()
 {
-    // Show RGM splash screen
     showSplashScreen();
-
-    // Detect screen dimensions
     getScreenDimensions(SCREEN_WIDTH, SCREEN_HEIGHT);
 
-    // Display program information
-    std::cout << "========================================" << std::endl;
-    std::cout << "🎥 RGM SENDER v2.0" << std::endl;
-    std::cout << "========================================" << std::endl;
-    std::cout << "Detected Resolution: " << SCREEN_WIDTH << "x" << SCREEN_HEIGHT << std::endl;
-    std::cout << "Target FPS: " << TARGET_FPS << std::endl;
-    std::cout << "========================================" << std::endl;
+    std::cout << COL_CYAN << COL_BOLD
+              << "========================================\n"
+                 "  RGM SENDER v2.0\n"
+                 "========================================\n" << COL_RESET
+              << "  Source: " << SCREEN_WIDTH << "x" << SCREEN_HEIGHT
+              << "  @ " << TARGET_FPS << " FPS\n"
+              << COL_CYAN << "========================================\n"
+              << COL_RESET;
 
-    // Initialize network sockets
-    if (!initSockets())
-    {
-        std::cerr << "❌ Failed to initialize sockets" << std::endl;
+    if (!initSockets()) {
+        std::cerr << COL_RED << "Socket init failed\n" << COL_RESET;
         return 1;
     }
 
-    // Discover available receivers
-    std::cout << "🔍 Discovering receivers..." << std::endl;
+    /* Discover receivers */
+    std::cout << COL_CYAN << "Discovering receivers...\n" << COL_RESET;
     auto receivers = discoverReceivers(5);
-
-    if (receivers.empty())
-    {
-        std::cerr << "❌ No receivers found!" << std::endl;
-        std::cerr << "   Make sure receiver is running on the same network." << std::endl;
-        std::cerr << "   Check firewall settings (UDP 1900, TCP 8081)." << std::endl;
-        cleanupSockets();
-        return 1;
+    if (receivers.empty()) {
+        std::cerr << COL_RED
+                  << "No receivers found!\n"
+                     "  Check firewall: UDP 1900, TCP 8081, TCP 8082\n"
+                  << COL_RESET;
+        cleanupSockets(); return 1;
     }
-
-    // Display found receivers
     std::cout << listDevices(receivers);
 
-    // Let user select receiver
-    size_t choice;
-    std::cout << "Select receiver (0-" << receivers.size() - 1 << "): ";
-    std::cin >> choice;
-
-    if (choice >= receivers.size())
-    {
-        std::cerr << "❌ Invalid selection" << std::endl;
-        cleanupSockets();
-        return 1;
+    /* Select receiver */
+    size_t choice = 0;
+    if (receivers.size() > 1) {
+        std::cout << COL_BOLD << "Select receiver (0-"
+                  << receivers.size() - 1 << "): " << COL_RESET;
+        if (!(std::cin >> choice) || choice >= receivers.size()) {
+            std::cerr << COL_RED << "Invalid selection\n" << COL_RESET;
+            cleanupSockets(); return 1;
+        }
     }
 
-    const auto &selected = receivers[choice];
-    std::cout << "🎯 Selected: " << selected.toString() << std::endl;
+    const auto &sel = receivers[choice];
+    std::cout << COL_GREEN << "Selected: " << sel.toString()
+              << COL_RESET << "\n";
 
-    // Connect to receiver
-    std::cout << "🔌 Connecting to receiver..." << std::endl;
+    /* Choose display mode */
+    DISPLAY_MODE = selectDisplayMode();
+    const char *modeLabel =
+        DISPLAY_MODE == MODE_EXTEND_RIGHT ? "Extend Right"  :
+        DISPLAY_MODE == MODE_EXTEND_BELOW ? "Extend Below"  : "Mirror";
+    std::cout << COL_GREEN << "Mode: " << modeLabel << COL_RESET << "\n";
 
-    NetworkSocket connection;
-    if (!connection.connect(selected.ip_address, selected.tcp_port))
-    {
-        std::cerr << "❌ Failed to connect to receiver" << std::endl;
-        std::cerr << "   Check if receiver is running and firewall allows TCP port 8081." << std::endl;
-        cleanupSockets();
-        return 1;
+    /* Attempt GPU offload */
+    std::cout << COL_MAGENTA << "GPU offload: "
+              << sel.ip_address << ":" << GPU_ACCEL_PORT << " ...\n"
+              << COL_RESET;
+    g_gpu_sock = gpu_remote_connect(sel.ip_address.c_str());
+    if (GPU_SOCK_VALID(g_gpu_sock)) {
+        g_gpu_active = true;
+        std::cout << COL_GREEN << "Remote GPU active\n" << COL_RESET;
+    } else {
+        std::cout << COL_YELLOW << "GPU service unavailable – CPU only\n"
+                  << COL_RESET;
     }
 
-    /**
-     * Send handshake information to receiver
-     */
-    struct
-    {
-        uint32_t width;
-        uint32_t height;
+    /* Connect stream socket */
+    NetworkSocket conn;
+    if (!conn.connect(sel.ip_address, sel.tcp_port)) {
+        if (g_gpu_active) gpu_remote_disconnect(g_gpu_sock);
+        cleanupSockets(); return 1;
+    }
+
+    /* ── Extended handshake ── */
+    struct {
+        uint32_t sender_width;
+        uint32_t sender_height;
         uint32_t fps;
-    } handshake = {
-        htonl(SCREEN_WIDTH),
-        htonl(SCREEN_HEIGHT),
-        htonl(TARGET_FPS)};
-
-    if (!connection.sendAll(&handshake, sizeof(handshake)))
-    {
-        std::cerr << "❌ Failed to send screen dimensions to receiver" << std::endl;
-        cleanupSockets();
-        return 1;
+        uint32_t mode;        /* MODE_EXTEND_RIGHT / MODE_MIRROR / etc. */
+    } hs_out = {
+        htonl((uint32_t)SCREEN_WIDTH),
+        htonl((uint32_t)SCREEN_HEIGHT),
+        htonl((uint32_t)TARGET_FPS),
+        htonl(DISPLAY_MODE)
+    };
+    if (!conn.sendAll(&hs_out, sizeof(hs_out))) {
+        if (g_gpu_active) gpu_remote_disconnect(g_gpu_sock);
+        cleanupSockets(); return 1;
     }
 
-    std::cout << "🎬 Starting stream..." << std::endl;
-    std::cout << "   Press Ctrl+C to stop" << std::endl;
+    /* Receive receiver's display size */
+    struct {
+        uint32_t recv_width;
+        uint32_t recv_height;
+        uint32_t status;
+    } hs_in = {};
+    if (!conn.recvAll(&hs_in, sizeof(hs_in)) || ntohl(hs_in.status) != 0) {
+        std::cerr << COL_RED << "Handshake response failed\n" << COL_RESET;
+        if (g_gpu_active) gpu_remote_disconnect(g_gpu_sock);
+        cleanupSockets(); return 1;
+    }
+    RECV_WIDTH  = (int)ntohl(hs_in.recv_width);
+    RECV_HEIGHT = (int)ntohl(hs_in.recv_height);
 
-    // Initialize timing variables
-    auto last_time = std::chrono::steady_clock::now();
-    auto stats_time = last_time;
-    int frames_sent = 0;
-    size_t total_bytes = 0;
-    bool streaming = true;
+    std::cout << COL_GREEN
+              << "Extended desktop active:\n"
+              << "  Sender:   " << SCREEN_WIDTH  << "x" << SCREEN_HEIGHT << "\n"
+              << "  Receiver: " << RECV_WIDTH    << "x" << RECV_HEIGHT   << "\n"
+              << "  Layout:   " << modeLabel << "\n"
+              << "  Total:    ";
+    if (DISPLAY_MODE == MODE_EXTEND_RIGHT)
+        std::cout << (SCREEN_WIDTH + RECV_WIDTH) << "x"
+                  << std::max(SCREEN_HEIGHT, RECV_HEIGHT) << "\n";
+    else if (DISPLAY_MODE == MODE_EXTEND_BELOW)
+        std::cout << std::max(SCREEN_WIDTH, RECV_WIDTH) << "x"
+                  << (SCREEN_HEIGHT + RECV_HEIGHT) << "\n";
+    else
+        std::cout << SCREEN_WIDTH << "x" << SCREEN_HEIGHT << " (mirror)\n";
+    std::cout << COL_RESET;
 
-    // Calculate frame duration in microseconds
-    const auto frame_duration = std::chrono::microseconds(1000000 / TARGET_FPS);
+    std::cout << COL_GREEN << "Streaming – Ctrl+C to stop\n" << COL_RESET;
 
-    /**
-     * Main streaming loop
-     */
-    while (streaming && g_running)
-    {
-        auto frame_start = std::chrono::steady_clock::now();
+    /* ── Streaming loop ── */
+    const auto frame_dur   = std::chrono::microseconds(1000000 / TARGET_FPS);
+    auto       last_stats  = std::chrono::steady_clock::now();
+    auto       sess_start  = last_stats;
+    int        frames_sent = 0;
+    size_t     total_bytes = 0;
+    int        fbehind     = 0;
+    std::vector<uint8_t> comp_buf;
 
-        // Capture current screen
+    while (g_running) {
+        auto t0 = std::chrono::steady_clock::now();
+
         auto frame = captureScreen();
 
-        // Send frame size (network byte order)
-        uint32_t frame_size = frame.size();
-        uint32_t net_frame_size = htonl(frame_size);
+        /* GPU offload: RLE compress on receiver */
+        const uint8_t *send_ptr  = frame.data();
+        uint32_t       send_size = (uint32_t)frame.size();
 
-        if (!connection.sendAll(&net_frame_size, 4))
-        {
-            std::cerr << "❌ Failed to send frame size" << std::endl;
-            break;
-        }
-
-        // Send frame data
-        if (!connection.sendAll(frame.data(), frame.size()))
-        {
-            std::cerr << "❌ Failed to send frame data" << std::endl;
-            break;
-        }
-
-        // Update statistics
-        frames_sent++;
-        total_bytes += 4 + frame_size;
-
-        // Display periodic statistics
-        auto now = std::chrono::steady_clock::now();
-        auto stats_elapsed = std::chrono::duration_cast<std::chrono::seconds>(
-                                 now - stats_time)
-                                 .count();
-
-        if (stats_elapsed >= STATS_INTERVAL_SEC)
-        {
-            showStats(frames_sent, stats_elapsed, total_bytes);
-            stats_time = now;
-        }
-
-        /**
-         * Adaptive frame timing
-         * Skip frames if we're falling behind to maintain real-time
-         */
-        auto frame_end = std::chrono::steady_clock::now();
-        auto frame_time = frame_end - frame_start;
-
-        static int frames_behind = 0;
-        if (frame_time > frame_duration)
-        {
-            frames_behind++;
-            if (frames_behind > MAX_FRAME_SKIP)
-            {
-                frames_behind = 0;
-                continue; // Skip this frame's wait time
+        if (g_gpu_active) {
+            uint8_t *out = nullptr;
+            int csz = gpu_remote_compress(g_gpu_sock, frame.data(),
+                                          (uint32_t)SCREEN_WIDTH,
+                                          (uint32_t)SCREEN_HEIGHT, &out);
+            if (csz > 0 && out) {
+                comp_buf.assign(out, out + csz);
+                free(out);
+                send_ptr  = comp_buf.data();
+                send_size = (uint32_t)csz;
+            } else {
+                gpu_remote_disconnect(g_gpu_sock);
+                g_gpu_sock   = GPU_INVALID_SOCK;
+                g_gpu_active = false;
+                std::cerr << COL_YELLOW
+                          << "GPU lost – CPU fallback\n" << COL_RESET;
             }
         }
-        else
-        {
-            frames_behind = 0;
-            std::this_thread::sleep_for(frame_duration - frame_time);
+
+        uint32_t net_sz = htonl(send_size);
+        if (!conn.sendAll(&net_sz, 4) ||
+            !conn.sendAll(send_ptr, send_size)) {
+            std::cerr << COL_RED << "Frame send failed\n" << COL_RESET;
+            break;
+        }
+
+        frames_sent++;
+        total_bytes += 4 + send_size;
+
+        auto now  = std::chrono::steady_clock::now();
+        auto secs = std::chrono::duration_cast<std::chrono::seconds>(
+                        now - last_stats).count();
+        if (secs >= STATS_INTERVAL_SEC) {
+            showStats(frames_sent, secs, total_bytes);
+            last_stats = now;
+        }
+
+        /* Adaptive timing */
+        auto elapsed = std::chrono::steady_clock::now() - t0;
+        if (elapsed > frame_dur) {
+            if (++fbehind > MAX_FRAME_SKIP) { fbehind = 0; continue; }
+        } else {
+            fbehind = 0;
+            std::this_thread::sleep_for(frame_dur - elapsed);
         }
     }
 
-    // Display final statistics
-    auto end_time = std::chrono::steady_clock::now();
-    auto total_seconds = std::chrono::duration_cast<std::chrono::seconds>(
-                             end_time - last_time)
-                             .count();
+    /* Final stats */
+    auto total_s = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - sess_start).count();
+    float total_mb = (float)total_bytes / (1024.0f * 1024.0f);
 
-    std::cout << "========================================" << std::endl;
-    std::cout << "📊 STREAMING STATISTICS" << std::endl;
-    std::cout << "========================================" << std::endl;
-    std::cout << "Resolution:      " << SCREEN_WIDTH << "x" << SCREEN_HEIGHT << std::endl;
-    std::cout << "Frames sent:     " << frames_sent << std::endl;
-    std::cout << "Duration:        " << total_seconds << " seconds" << std::endl;
-    if (total_seconds > 0)
-    {
-        std::cout << "Average FPS:     " << (frames_sent / total_seconds) << std::endl;
-        float total_mb = total_bytes / (1024.0 * 1024.0);
-        std::cout << "Total data:      " << std::fixed << std::setprecision(2) << total_mb << " MB" << std::endl;
-        std::cout << "Avg bandwidth:   " << std::fixed << std::setprecision(2) << (total_mb / total_seconds) << " MB/s" << std::endl;
-    }
-    std::cout << "========================================" << std::endl;
+    std::cout << COL_CYAN << COL_BOLD
+              << "\n========================================\n"
+                 "  SESSION STATISTICS\n"
+                 "========================================\n" << COL_RESET
+              << "  Mode       : " << modeLabel << "\n"
+              << "  Source res : " << SCREEN_WIDTH  << "x" << SCREEN_HEIGHT << "\n"
+              << "  Recv res   : " << RECV_WIDTH    << "x" << RECV_HEIGHT   << "\n"
+              << "  Frames     : " << frames_sent << "\n"
+              << "  Duration   : " << total_s << " s\n";
+    if (total_s > 0)
+        std::cout << "  Avg FPS    : " << frames_sent / total_s << "\n"
+                  << "  Data       : " << std::fixed << std::setprecision(2)
+                                       << total_mb << " MB\n"
+                  << "  Avg BW     : " << total_mb / (float)total_s
+                                       << " MB/s\n";
+    std::cout << COL_CYAN << "========================================\n"
+              << COL_RESET;
 
-    // Cleanup
+    if (g_gpu_active) gpu_remote_disconnect(g_gpu_sock);
     cleanupSockets();
     return 0;
 }
