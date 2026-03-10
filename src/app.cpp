@@ -32,8 +32,8 @@
 #endif
 
 // Version information
-#define VERSION "2.0.0"
-#define APP_NAME "RGM"
+#define VERSION "2.0.1"
+#define APP_NAME "RGM(Ralefaso GlassMirror)"
 
 // Splash screen constants
 #define SPLASH_WIDTH 500
@@ -191,15 +191,15 @@ int showMenu()
 #endif
 
         std::cout << COLOR_CYAN << COLOR_BOLD;
-        std::cout << "╔═══════════════════════════════════════╗\n";
-        std::cout << "║          RGM LAUNCHER v" << VERSION << "          ║\n";
-        std::cout << "╠═══════════════════════════════════════╣\n";
-        std::cout << "║                                       ║\n";
+        std::cout << "╔══════════════════════════════════════================================═╗\n";
+        std::cout << "║                         RGM  v" << VERSION << "                       ║\n";
+        std::cout << "╠══════════════════════════════════════================================═╣\n";
+        std::cout << "║                                                                       ║\n";
         std::cout << "║  " << COLOR_GREEN  << "1.  SEND SCREEN            " << COLOR_CYAN << "║\n";
         std::cout << "║  " << COLOR_YELLOW << "2.  RECEIVE SCREEN         " << COLOR_CYAN << "║\n";
         std::cout << "║  " << COLOR_RED    << "0.  EXIT                   " << COLOR_CYAN << "║\n";
-        std::cout << "║                                       ║\n";
-        std::cout << "╚═══════════════════════════════════════╝\n" << COLOR_RESET;
+        std::cout << "║                                                                       ║\n";
+        std::cout << "╚══════════════════════════════════════================================═╝\n" << COLOR_RESET;
 
         std::cout << COLOR_BOLD << "\nEnter your choice (1-3): " << COLOR_RESET;
         std::getline(std::cin, input);

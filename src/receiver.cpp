@@ -1065,7 +1065,7 @@ int main()
     queryMyDisplaySize();
 
     std::cout << "========================================\n"
-              << "  RGM RECEIVER v2.0  –  Screen Extender\n"
+              << "         RGM RECEIVER v2.0.1            \n"
               << "========================================\n"
               << "  Local IP   : " << getLocalIPAddress() << "\n"
               << "  My display : " << MY_DISPLAY_WIDTH

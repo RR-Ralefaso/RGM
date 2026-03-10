@@ -146,7 +146,7 @@ static void showSplashScreen()
 {
     std::cout << COL_CYAN << COL_BOLD
               << "========================================\n"
-                 "  RGM SENDER v2.0\n"
+                 "        RGM SENDER v2.0.1               \n"
                  "========================================\n"
               << COL_RESET;
 
