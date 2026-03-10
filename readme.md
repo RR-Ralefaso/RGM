@@ -1,4 +1,4 @@
-# RGM
+# RGM (Ralefaso GlassMirror)
 
 <div align="center">
 
@@ -368,7 +368,7 @@ RGM/
 Expected output:
 ```
 ========================================
-  RGM RECEIVER v2.0  –  Screen Extender
+  RGM RECEIVER v2.0.1 
 ========================================
   Local IP   : 192.168.1.105
   My display : 1920x1080
@@ -425,7 +425,7 @@ The launcher shows the rcorp.jpeg splash screen then presents:
 
 ```
 ╔═══════════════════════════════════╗
-║      RGM v2.0.0                   ║
+║      RGM v2.0.1                   ║
 ╠═══════════════════════════════════╣
 ║                                   ║
 ║  1.  SEND SCREEN                  ║
