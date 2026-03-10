@@ -33,7 +33,7 @@ Your support helps maintain and improve RGM for everyone.
 
 ## Overview
 
-RGM is a lightweight, cross-platform screen sharing solution that eliminates complex network configuration. It implements SSDP (Simple Service Discovery Protocol) to automatically detect receiving hosts on your local network, enabling seamless screen streaming with minimal latency and high frame rates.
+RGM (Ralefaso GlassMirro) is a lightweight, cross-platform screen sharing solution that eliminates complex network configuration. It implements SSDP (Simple Service Discovery Protocol) to automatically detect receiving hosts on your local network, enabling seamless screen streaming with minimal latency and high frame rates.
 
 The application is designed for professionals who need to share screens across multiple machines without the overhead of configuring IP addresses, firewall rules, or connection parameters.
 
