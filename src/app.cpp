@@ -5,8 +5,9 @@
  * It displays the RGM splash screen and provides a menu for users to
  * choose between sender and receiver modes.
  */
-
+#include <cstdlib>
 #include <iostream>
+#include <csignal>
 #include <string>
 #include <thread>
 #include <chrono>
@@ -213,8 +214,14 @@ int showMenu()
         {
             choice = -1;
         }
+        if (choice==3){
+            // void sendCtrlC(); //dangerous fix later
+            // sendCtrlC();
+            std::cout << "Exiting safely...\n";
+            std::exit(0); 
+        }
 
-        if (choice < 0 || choice > 2)
+        else if (choice < 0 || choice > 3)
         {
             std::cout << COLOR_RED << "❌ Invalid choice. Please enter 0, 1, or 2.\n"
                       << COLOR_RESET;
@@ -225,6 +232,55 @@ int showMenu()
 
     return choice;
 }
+
+
+// /*
+// * creating a control c (cross+platform)
+// */
+
+// void sendCtrlC(){
+// #ifdef _WIN32
+//     // Windows-specific SendInput code
+//     std::cout << "Simulating Ctrl+C on Windows..." << std::endl;
+
+//     // Simulating CTRL + C using the Windows API (SendInput)
+//     INPUT input[4] = {}; // We'll need 4 inputs: CTRL down, C down, C up, CTRL up
+
+//     // Press CTRL
+//     input[0].type = INPUT_KEYBOARD;
+//     input[0].ki.wVk = VK_CONTROL; // Virtual key code for CTRL
+
+//     // Press 'C'
+//     input[1].type = INPUT_KEYBOARD;
+//     input[1].ki.wVk = 0x43; // Virtual key code for 'C'
+
+//     // Release 'C'
+//     input[2].type = INPUT_KEYBOARD;
+//     input[2].ki.wVk = 0x43; // Virtual key code for 'C'
+//     input[2].ki.dwFlags = KEYEVENTF_KEYUP;
+
+//     // Release CTRL
+//     input[3].type = INPUT_KEYBOARD;
+//     input[3].ki.wVk = VK_CONTROL; // Virtual key code for CTRL
+//     input[3].ki.dwFlags = KEYEVENTF_KEYUP;
+
+//     // Send the input events
+//     SendInput(4, input, sizeof(INPUT));
+
+// #elif __APPLE__
+//     // macOS-specific AppleScript code
+//     std::cout << "Simulating Command+C on macOS..." << std::endl;
+//     system("osascript -e 'tell application \"System Events\" to keystroke \"c\" using {command down}'");
+
+// #elif __linux__
+//     // Linux-specific X11/uinput code
+//     std::cout << "Simulating Ctrl+C on Linux..." << std::endl;
+
+//     // Usually requires 'xdotool' to be installed
+//     system("xdotool key ctrl+c");
+
+// #endif
+// }
 
 /**
  * Run sender
