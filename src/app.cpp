@@ -214,14 +214,14 @@ int showMenu()
         {
             choice = -1;
         }
-        if (choice==3){
-            // void sendCtrlC(); //dangerous fix later
-            // sendCtrlC();
-            std::cout << "Exiting safely...\n";
-            std::exit(0); 
-        }
+        // if (choice==3){
+        //     // void sendCtrlC(); //dangerous fix later
+        //     // sendCtrlC();
+        //     std::cout << "Exiting safely...\n";
+        //     std::exit(0); 
+        // }
 
-        else if (choice < 0 || choice > 3)
+        if (choice < 0 || choice > 2)
         {
             std::cout << COLOR_RED << "❌ Invalid choice. Please enter 0, 1, or 2.\n"
                       << COLOR_RESET;
