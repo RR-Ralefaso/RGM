@@ -33,7 +33,7 @@ Your support helps maintain and improve RGM for everyone.
 
 ## Overview
 
-RGM (Ralefaso GlassMirro) is a lightweight, cross-platform **screen extender** that turns any networked machine into a wireless second monitor. It implements SSDP (Simple Service Discovery Protocol) to automatically detect receiver hosts on your local network, requiring zero manual IP configuration.
+RGM (Ralefaso GlassMirror) is a lightweight, cross-platform **screen extender** that turns any networked machine into a wireless second monitor. It implements SSDP (Simple Service Discovery Protocol) to automatically detect receiver hosts on your local network, requiring zero manual IP configuration.
 
 The receiver machine opens a **borderless fullscreen window** that presents itself as a natural display extension — positioned logically to the right of, or below, the sender's screen. The result looks and behaves like a real second monitor plugged into the sender machine.
 
@@ -48,11 +48,12 @@ A mirror mode (classic screen duplication) is also available for presentations a
 | **Screen Extension** | Extend Right, Extend Below, or Mirror modes — chosen per session |
 | **Discovery** | Zero-configuration SSDP automatic detection, no IP setup needed |
 | **Performance** | 60 FPS streaming, 4 MB socket buffers, TCP_NODELAY optimisation |
-| **GPU Offload** | Optional RLE frame compression offloaded to receiver GPU (TCP 8082) |
+| **CPU Offload** | RLE frame compression and colour correction offloaded to the receiver's CPU (TCP 8082) |
+| **Port Inspector** | Full remote port inspection: list, query, and kill processes on any receiver port (TCP 8083) |
 | **Platform Support** | Linux (X11), Windows 10/11, macOS 10.15+ |
 | **Display Handling** | Auto-resolution handshake, borderless fullscreen, aspect-ratio scaling |
 | **Splash Screen** | rcorp.jpeg corporate logo displayed at launch via SDL2_image |
-| **Monitoring** | Real-time FPS, bandwidth, source/destination resolution display |
+| **Monitoring** | Real-time FPS, bandwidth, source/destination resolution, real measured offload timing |
 | **User Interface** | Splash screen, menu-driven launcher, direct executable mode |
 
 ---
@@ -66,12 +67,14 @@ RGM/
 ├── makefile                     # Cross-platform build (Linux/macOS/Windows)
 ├── src/                         # Source code
 │   ├── app.cpp                  # Launcher: splash + menu
-│   ├── sender.cpp               # Screen capture, extender handshake, stream
-│   ├── receiver.cpp             # Fullscreen display, SSDP advertiser, GPU svc
+│   ├── sender.cpp               # Screen capture, extender handshake, stream, port inspector client
+│   ├── receiver.cpp             # Fullscreen display, SSDP advertiser, compute svc, port svc
 │   ├── discover.cpp             # SSDP discovery engine
 │   ├── discover.h               # Discovery API
-│   ├── gpu_accelerate.c         # Remote GPU offload (RLE compress / colorfix)
-│   └── gpu_accelerate.h         # GPU offload API
+│   ├── gpu_accelerate.c         # Remote CPU offload (RLE compress / colorfix) with real timing
+│   ├── gpu_accelerate.h         # Compute offload API
+│   ├── ports.cpp                # Remote port inspection service (server + client)
+│   └── ports.h                  # Port inspector API
 ├── assets/
 │   └── icons/
 │       ├── rcorp.jpeg           # Corporate splash logo  ← shown at startup
@@ -88,8 +91,8 @@ RGM/
 | Executable | Role |
 |------------|------|
 | `app` | Menu launcher — choose send / receive mode |
-| `sender` | Captures local display, negotiates mode, streams frames |
-| `receiver` | Advertises via SSDP, opens fullscreen window, renders frames |
+| `sender` | Captures local display, negotiates mode, streams frames, runs port inspector client |
+| `receiver` | Advertises via SSDP, opens fullscreen window, renders frames, runs compute and port services |
 
 ### Network Ports
 
@@ -97,7 +100,8 @@ RGM/
 |------|----------|---------|
 | 1900 | UDP multicast | SSDP discovery (M-SEARCH / NOTIFY) |
 | 8081 | TCP | Video frame stream |
-| 8082 | TCP | GPU offload service (optional) |
+| 8082 | TCP | CPU compute offload service (RLE compress / colour fix) |
+| 8083 | TCP | Remote port inspection service |
 
 ---
 
@@ -144,7 +148,7 @@ The sender uses the receiver's reported resolution to display the combined virtu
 | Extend Right / Below | `SDL_WINDOW_FULLSCREEN_DESKTOP` — borderless, covers the entire receiver display, appears as a physical second monitor |
 | Mirror | Normal resizable window, scaled to fit |
 
-In extend modes the receiver also draws a subtle 2-pixel blue edge glow on the side that logically joins to the sender's screen (left edge for extend-right, top edge for extend-below) so users can see the logical join line.
+In extend modes the receiver also draws a subtle 2-pixel blue edge glow on the side that logically joins to the sender's screen (left edge for extend-right, top edge for extend-below).
 
 ### 4 — Frame Stream
 
@@ -152,7 +156,7 @@ Every frame:
 
 ```
 Sender  →  captures screen (X11 / GDI / CoreGraphics)
-        →  optionally RLE-compresses via GPU offload service
+        →  optionally RLE-compresses via compute offload service
         →  sends  [uint32 frame_size] [frame_bytes]
 
 Receiver →  reads size header
@@ -161,31 +165,56 @@ Receiver →  reads size header
          →  SDL_UpdateTexture → SDL_RenderCopy → SDL_RenderPresent
 ```
 
-### 5 — GPU Offload Service
+### 5 — CPU Compute Offload Service (port 8082)
 
-The receiver runs a second TCP server on port 8082 (`gpu_accelerate.c`). The sender connects to it optionally before streaming begins.
+The receiver runs a second TCP server on port 8082 (`gpu_accelerate.c`). The sender connects to it optionally before streaming begins. All work is performed on the **receiver's CPU** — the sender sends raw pixel data, the receiver processes it and sends back the result, so processing load is shifted off the sender machine.
+
+Timing is measured with `clock_gettime(CLOCK_MONOTONIC)` on Linux/macOS and `QueryPerformanceCounter` on Windows, so the `ms_elapsed` values reported are real measured durations, not estimates.
 
 | Operation | Code | Description |
 |-----------|------|-------------|
 | PING | 0xFF | Heartbeat / handshake check |
-| COMPRESS | 0x01 | RLE-compress a raw RGB frame |
-| COLORCONV | 0x03 | BGR → RGB channel swap |
+| COMPRESS | 0x01 | RLE-compress a raw RGB frame (receiver CPU) |
+| COLORCONV | 0x03 | BGR → RGB channel swap (receiver CPU) |
 
-If the GPU service is unavailable the sender falls back silently to uncompressed CPU-side frames.
+If the compute service is unavailable the sender falls back silently to uncompressed local frames.
+
+### 6 — Port Inspection Service (port 8083)
+
+The receiver runs a third TCP server on port 8083 (`ports.cpp`). Once connected, the sender can interactively inspect every listening socket on the receiver machine:
+
+| Operation | Description |
+|-----------|-------------|
+| LIST_TCP | All TCP sockets with PID, process name, state, addresses |
+| LIST_UDP | All UDP sockets |
+| LIST_ALL | TCP + UDP combined |
+| GET_PORT | Details for one specific port number |
+| KILL_PORT | Send SIGTERM to the process owning a port |
+
+Port data is collected natively per platform:
+
+| Platform | Method |
+|----------|--------|
+| Linux | `/proc/net/tcp`, `tcp6`, `udp`, `udp6` + inode→PID mapping via `/proc/PID/fd` |
+| macOS | `lsof -nP -iTCP -iUDP` |
+| Windows | `GetExtendedTcpTable` / `GetExtendedUdpTable` (iphlpapi) + `CreateToolhelp32Snapshot` |
 
 ### Streaming Architecture
 
 ```
-┌─────────────┐   handshake   ┌─────────────────────────────────────┐
-│   SENDER    │  ──────────►  │             RECEIVER                │
-│             │               │                                     │
-│ capture     │  frame data   │  RLE decode → SDL2 texture          │
-│ (X11/GDI/  │  ──────────►  │  → fullscreen borderless window     │
-│  CG)        │  TCP 8081     │    (extend-right / below / mirror)  │
-│             │               │                                     │
-│ RLE via     │  GPU proto    │  gpu_service_run() on TCP 8082      │
-│ GPU offload │  ──────────►  │  (RLE compress / color fix)        │
-└─────────────┘  TCP 8082     └─────────────────────────────────────┘
+┌─────────────┐   handshake   ┌──────────────────────────────────────────┐
+│   SENDER    │  ──────────►  │              RECEIVER                    │
+│             │               │                                          │
+│ capture     │  frame data   │  RLE decode → SDL2 texture               │
+│ (X11/GDI/  │  ──────────►  │  → fullscreen borderless window          │
+│  CG)        │  TCP 8081     │    (extend-right / below / mirror)       │
+│             │               │                                          │
+│ RLE via     │  compute proto│  gpu_service_run() on TCP 8082           │
+│ CPU offload │  ──────────►  │  (RLE compress / color fix, real timing) │
+│             │  TCP 8082     │                                          │
+│ port cmds   │  port proto   │  ports_service_run() on TCP 8083         │
+│ interactive │  ──────────►  │  (list/query/kill receiver ports)        │
+└─────────────┘  TCP 8083     └──────────────────────────────────────────┘
 ```
 
 ---
@@ -254,7 +283,7 @@ The receiver displays an exact duplicate of the sender's screen in a normal resi
 | Version | Windows 10 build 1903+ or Windows 11 |
 | Compiler | MinGW-w64 (MSYS2) or MSVC 2019+ |
 | Libraries | SDL2, **SDL2_image** (from MSYS2 packages) |
-| SDK | Windows SDK 10.0+ |
+| SDK | Windows SDK 10.0+ (iphlpapi required for port inspector) |
 
 #### macOS
 
@@ -350,7 +379,8 @@ RGM/
     ├── receiver.o
     ├── app.o
     ├── discover.o
-    └── gpu_accelerate.o
+    ├── gpu_accelerate.o
+    └── ports.o
 ```
 
 ---
@@ -368,13 +398,15 @@ RGM/
 Expected output:
 ```
 ========================================
-  RGM RECEIVER v2.0.1 
+  RGM RECEIVER v2.0.1
 ========================================
   Local IP   : 192.168.1.105
   My display : 1920x1080
   Stream TCP : 8081
-  GPU TCP    : 8082
+  Compute TCP: 8082
+  Ports TCP  : 8083
   SSDP UDP   : 239.255.255.250:1900
+  GPU Stats  : gpu_stats.json
   Modes      : extend-right | extend-below | mirror
 ========================================
 Waiting for sender on TCP 8081 ...
@@ -404,6 +436,9 @@ RECEIVERS FOUND:
 
 Mode: Extend Right
 
+Remote compute (CPU offload) active
+Port inspector active  (press 'p' during stream)
+
 Extended desktop active:
   Sender:   1920x1080
   Receiver: 1920x1080
@@ -413,7 +448,7 @@ Extended desktop active:
 Streaming – Ctrl+C to stop
 ```
 
-The receiver's display immediately goes fullscreen and begins showing the sender's screen content. Move windows past the right edge of the sender's screen and they will appear on the receiver.
+The receiver's display immediately goes fullscreen and begins showing the sender's screen content.
 
 ### Using the Launcher
 
@@ -424,15 +459,15 @@ The receiver's display immediately goes fullscreen and begins showing the sender
 The launcher shows the rcorp.jpeg splash screen then presents:
 
 ```
-╔═══════════════════════════════════╗
-║      RGM v2.0.1                   ║
-╠═══════════════════════════════════╣
-║                                   ║
-║  1.  SEND SCREEN                  ║
-║  2.  RECEIVE SCREEN               ║
-║  0.  EXIT                         ║
-║                                   ║
-╚═══════════════════════════════════╝
+╔════════════════════════════════╗
+║      RGM v2.0.2                ║
+╠════════════════════════════════╣
+║                                ║
+║  1.  SEND SCREEN               ║
+║  2.  RECEIVE SCREEN            ║
+║  0.  EXIT                      ║
+║                                ║
+╚════════════════════════════════╝
 ```
 
 ### Receiver Controls
@@ -445,11 +480,31 @@ The launcher shows the rcorp.jpeg splash screen then presents:
 
 ### Sender Controls
 
-| Key | Action |
-|-----|--------|
+| Key / Input | Action |
+|-------------|--------|
 | Ctrl+C | Graceful shutdown |
 | Number at prompt | Select receiver from list |
 | 1 / 2 / 3 at mode prompt | Choose Extend Right / Extend Below / Mirror |
+| `p` at stream prompt | Open Port Inspector menu |
+
+### Port Inspector Menu
+
+When the sender connects to a receiver, it also connects to the port inspection service on TCP 8083. Press `p` (or enter it at the prompt) to open the interactive menu:
+
+```
+╔════════════════════════════════╗
+║   RECEIVER PORT INSPECTOR      ║
+╠════════════════════════════════╣
+║  1. List all TCP ports         ║
+║  2. List all UDP ports         ║
+║  3. List ALL ports             ║
+║  4. Query specific port        ║
+║  5. Kill process on port       ║
+║  0. Back to stream             ║
+╚════════════════════════════════╝
+```
+
+The table output shows protocol, local address:port, remote address:port, TCP state, PID, and process name — all read live from the receiver OS. The kill option sends `SIGTERM` (Linux/macOS) or `TerminateProcess` (Windows) to the process owning the specified port.
 
 ---
 
@@ -462,16 +517,18 @@ The launcher shows the rcorp.jpeg splash screen then presents:
 ```bash
 sudo ufw allow 1900/udp comment 'RGM SSDP'
 sudo ufw allow 8081/tcp comment 'RGM Video Stream'
-sudo ufw allow 8082/tcp comment 'RGM GPU Offload'
+sudo ufw allow 8082/tcp comment 'RGM Compute Offload'
+sudo ufw allow 8083/tcp comment 'RGM Port Inspector'
 sudo ufw reload
 ```
 
 #### Linux (iptables)
 
 ```bash
-sudo iptables -A INPUT  -p udp --dport 1900 -j ACCEPT
-sudo iptables -A INPUT  -p tcp --dport 8081 -j ACCEPT
-sudo iptables -A INPUT  -p tcp --dport 8082 -j ACCEPT
+sudo iptables -A INPUT -p udp --dport 1900 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 8081 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 8082 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 8083 -j ACCEPT
 ```
 
 #### Windows (PowerShell — Administrator)
@@ -479,7 +536,8 @@ sudo iptables -A INPUT  -p tcp --dport 8082 -j ACCEPT
 ```powershell
 New-NetFirewallRule -DisplayName "RGM SSDP"     -Direction Inbound -Protocol UDP -LocalPort 1900 -Action Allow
 New-NetFirewallRule -DisplayName "RGM Stream"   -Direction Inbound -Protocol TCP -LocalPort 8081 -Action Allow
-New-NetFirewallRule -DisplayName "RGM GPU"      -Direction Inbound -Protocol TCP -LocalPort 8082 -Action Allow
+New-NetFirewallRule -DisplayName "RGM Compute"  -Direction Inbound -Protocol TCP -LocalPort 8082 -Action Allow
+New-NetFirewallRule -DisplayName "RGM Ports"    -Direction Inbound -Protocol TCP -LocalPort 8083 -Action Allow
 ```
 
 #### macOS
@@ -508,7 +566,7 @@ sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /path/to/sender
 | 1920×1080  | ~280 MB/s | ~560 MB/s |
 | 2560×1440  | ~500 MB/s | ~1 GB/s |
 
-> GPU offload RLE compression typically reduces bandwidth by 30–70% for desktop content (text, UI). Video content compresses less.
+> CPU offload RLE compression typically reduces bandwidth by 30–70% for desktop content (text, UI). Video content compresses less. The compression ratio and time are reported accurately based on real measurements.
 
 ### Latency
 
@@ -517,6 +575,10 @@ sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /path/to/sender
 | Wired 1 Gbps | < 5 ms |
 | WiFi 5 GHz  | 10–15 ms |
 | WiFi 2.4 GHz | 20–35 ms |
+
+### Compute Offload Stats
+
+The receiver writes live statistics to `gpu_stats.json` every 60 seconds and prints a summary to the console every 30 seconds. Stats include total operations, bytes processed in/out, real average compression ratio, actual milliseconds per operation, and per-client connection counts.
 
 ---
 
@@ -527,21 +589,26 @@ sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add /path/to/sender
 | No receivers found | Network connectivity | Verify firewall allows UDP 1900 on receiver |
 | Connection refused | Receiver running? | Check port 8081 is open; restart receiver |
 | Black screen on receiver | Handshake exchange | Ensure both binaries are the same version |
-| Low FPS | Network utilisation | Use wired Ethernet; enable GPU offload |
+| Low FPS | Network utilisation | Use wired Ethernet; enable CPU offload |
+| Compute offload unavailable | Port 8082 blocked | Allow TCP 8082 in firewall on receiver |
+| Port inspector unavailable | Port 8083 blocked | Allow TCP 8083 in firewall on receiver |
 | rcorp.jpeg not showing | Asset path | Place `rcorp.jpeg` in `assets/icons/`; run `make check` |
 | SDL_image not found | Missing library | Run `make install-deps` or install `libsdl2-image-dev` |
+| Build fails on Windows | Missing iphlpapi | Ensure Windows SDK is installed; iphlpapi is linked automatically |
 | Build fails on macOS | Homebrew paths | Run `brew install sdl2 sdl2_image`; check `BREW_PREFIX` in makefile |
 
 ### Diagnostic Commands
 
 ```bash
-# Verify receiver is listening
-netstat -tulpn | grep -E '8081|8082|1900'
+# Verify receiver is listening on all four ports
+netstat -tulpn | grep -E '8081|8082|8083|1900'
 
 # Test TCP reachability
 nc -zv <receiver-ip> 8081
+nc -zv <receiver-ip> 8082
+nc -zv <receiver-ip> 8083
 
-# Check assets
+# Check assets and source files
 make check
 
 # Full rebuild
@@ -555,10 +622,13 @@ make clean && make
 - [x] Screen mirroring (original)
 - [x] Screen extender — Extend Right
 - [x] Screen extender — Extend Below
-- [x] Remote GPU offload (RLE compression)
+- [x] Remote CPU offload (RLE compression + colour correction)
+- [x] Real measured offload timing (clock_gettime / QueryPerformanceCounter)
 - [x] Extended handshake (resolution exchange)
 - [x] rcorp.jpeg splash via SDL2_image
 - [x] macOS CoreGraphics capture
+- [x] Remote port inspection service (TCP 8083)
+- [x] Per-client GPU stats tracking + JSON export
 - [ ] H.264/H.265 compression for bandwidth reduction
 - [ ] Audio capture and streaming
 - [ ] TLS encryption

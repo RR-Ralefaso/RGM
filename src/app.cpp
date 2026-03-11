@@ -32,13 +32,13 @@
 #endif
 
 // Version information
-#define VERSION "2.0.1"
+#define VERSION "2.0.2"
 #define APP_NAME "RGM(Ralefaso GlassMirror)"
 
 // Splash screen constants
 #define SPLASH_WIDTH 500
 #define SPLASH_HEIGHT 300
-#define SPLASH_DISPLAY_TIME 2000 // 2 seconds
+#define SPLASH_DISPLAY_TIME 1000 // 1 seconds
 
 // Menu colors (ANSI)
 #define COLOR_RESET "\033[0m"
@@ -107,7 +107,7 @@ void showSplashScreen()
     SDL_Surface *image = nullptr;
     const char *possiblePaths[] = {
         "../assets/icons/rcorp.jpeg",   /* running from build/        */
-        "assets/icons/rcorp.jpeg",      /* running from project root  */
+        "assets/icons/RGM.png",      /* running from project root  */
         "../assets/icons/RGM.png",
         "assets/icons/RGM.png",
 #ifndef _WIN32

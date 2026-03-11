@@ -47,6 +47,7 @@
 #include <algorithm>
 #include "discover.h"
 #include "gpu_accelerate.h"
+#include "ports.h"
 
 /* ── Platform headers ───────────────────────────────────────────────────── */
 #ifdef _WIN32
@@ -139,6 +140,9 @@ static std::atomic<bool> g_running{true};
 static gpu_sock_t g_gpu_sock   = GPU_INVALID_SOCK;
 static bool       g_gpu_active = false;
 
+/* Port inspection */
+static ports_sock_t g_ports_sock = PORTS_INVALID_SOCK;
+
 /* ══════════════════════════════════════════════════════════════════════════
  * SPLASH SCREEN  –  rcorp.jpeg preferred, RGM.png fallback
  * ══════════════════════════════════════════════════════════════════════════ */
@@ -146,7 +150,7 @@ static void showSplashScreen()
 {
     std::cout << COL_CYAN << COL_BOLD
               << "========================================\n"
-                 "        RGM SENDER v2.0.1               \n"
+                 "        RGM SENDER v2.0.2               \n"
                  "========================================\n"
               << COL_RESET;
 
@@ -534,6 +538,137 @@ static void showStats(int frames, long elapsed, size_t bytes)
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+ * PORTS INTERACTIVE MENU  –  inspect/manage receiver's ports
+ * ══════════════════════════════════════════════════════════════════════════ */
+static void print_port_entries(const PortEntry *entries, uint32_t count)
+{
+    if (count == 0) {
+        std::cout << COL_YELLOW << "  (no entries)\n" << COL_RESET;
+        return;
+    }
+    std::cout << COL_CYAN << COL_BOLD
+              << std::left
+              << std::setw(4)  << "Pro"
+              << std::setw(22) << "Local Address"
+              << std::setw(22) << "Remote Address"
+              << std::setw(14) << "State"
+              << std::setw(8)  << "PID"
+              << "Process\n"
+              << std::string(80, '-') << "\n"
+              << COL_RESET;
+    for (uint32_t i = 0; i < count; i++) {
+        std::cout << ports_entry_to_string(entries[i]) << "\n";
+    }
+    std::cout << COL_GREEN << "  Total: " << count << " entries\n" << COL_RESET;
+}
+
+static void ports_interactive_menu()
+{
+    if (!PORTS_SOCK_VALID(g_ports_sock)) {
+        std::cout << COL_RED << "Port service not connected.\n" << COL_RESET;
+        return;
+    }
+
+    while (true) {
+        std::cout << "\n" << COL_CYAN << COL_BOLD
+                  << "╔════════════════════════════════╗\n"
+                  << "║   RECEIVER PORT INSPECTOR      ║\n"
+                  << "╠════════════════════════════════╣\n"
+                  << "║  1. List all TCP ports         ║\n"
+                  << "║  2. List all UDP ports         ║\n"
+                  << "║  3. List ALL ports             ║\n"
+                  << "║  4. Query specific port        ║\n"
+                  << "║  5. Kill process on port       ║\n"
+                  << "║  0. Back to stream             ║\n"
+                  << "╚════════════════════════════════╝\n"
+                  << COL_RESET
+                  << COL_BOLD << "Choice: " << COL_RESET;
+
+        std::string line;
+        std::getline(std::cin, line);
+        if (line.empty()) continue;
+        int choice = -1;
+        try { choice = std::stoi(line); } catch (...) {}
+
+        if (choice == 0) break;
+
+        PortEntry *entries = nullptr;
+        uint32_t   count  = 0;
+
+        switch (choice) {
+        case 1:
+            std::cout << COL_CYAN << "\n── TCP Ports ──\n" << COL_RESET;
+            ports_remote_list_tcp(g_ports_sock, &entries, &count);
+            print_port_entries(entries, count);
+            ports_free_entries(entries);
+            break;
+
+        case 2:
+            std::cout << COL_CYAN << "\n── UDP Ports ──\n" << COL_RESET;
+            ports_remote_list_udp(g_ports_sock, &entries, &count);
+            print_port_entries(entries, count);
+            ports_free_entries(entries);
+            break;
+
+        case 3:
+            std::cout << COL_CYAN << "\n── All Ports ──\n" << COL_RESET;
+            ports_remote_list_all(g_ports_sock, &entries, &count);
+            print_port_entries(entries, count);
+            ports_free_entries(entries);
+            break;
+
+        case 4: {
+            std::cout << COL_BOLD << "Enter port number: " << COL_RESET;
+            std::string p; std::getline(std::cin, p);
+            int pn = -1;
+            try { pn = std::stoi(p); } catch (...) {}
+            if (pn < 1 || pn > 65535) {
+                std::cout << COL_RED << "Invalid port\n" << COL_RESET;
+                break;
+            }
+            int r = ports_remote_get_port(g_ports_sock, (uint16_t)pn, &entries, &count);
+            if (r < 0) {
+                std::cout << COL_RED << "Query failed\n" << COL_RESET;
+            } else {
+                std::cout << COL_CYAN << "\n── Port " << pn << " ──\n" << COL_RESET;
+                print_port_entries(entries, count);
+                ports_free_entries(entries);
+            }
+            break;
+        }
+
+        case 5: {
+            std::cout << COL_BOLD << "Enter port number to kill: " << COL_RESET;
+            std::string p; std::getline(std::cin, p);
+            int pn = -1;
+            try { pn = std::stoi(p); } catch (...) {}
+            if (pn < 1 || pn > 65535) {
+                std::cout << COL_RED << "Invalid port\n" << COL_RESET;
+                break;
+            }
+            std::cout << COL_YELLOW
+                      << "⚠  Kill process on port " << pn
+                      << " on the RECEIVER? [y/N]: " << COL_RESET;
+            std::string confirm; std::getline(std::cin, confirm);
+            if (confirm == "y" || confirm == "Y") {
+                int r = ports_remote_kill_port(g_ports_sock, (uint16_t)pn);
+                if (r == 0)
+                    std::cout << COL_GREEN << "Kill signal sent\n" << COL_RESET;
+                else
+                    std::cout << COL_RED << "Kill failed or no process found\n" << COL_RESET;
+            } else {
+                std::cout << "Cancelled\n";
+            }
+            break;
+        }
+
+        default:
+            std::cout << COL_RED << "Invalid choice\n" << COL_RESET;
+        }
+    }
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
  * MAIN
  * ══════════════════════════════════════════════════════════════════════════ */
 int main()
@@ -596,16 +731,29 @@ int main()
     g_gpu_sock = gpu_remote_connect(sel.ip_address.c_str());
     if (GPU_SOCK_VALID(g_gpu_sock)) {
         g_gpu_active = true;
-        std::cout << COL_GREEN << "Remote GPU active\n" << COL_RESET;
+        std::cout << COL_GREEN << "Remote compute (CPU offload) active\n" << COL_RESET;
     } else {
-        std::cout << COL_YELLOW << "GPU service unavailable – CPU only\n"
+        std::cout << COL_YELLOW << "Compute service unavailable – local CPU only\n"
                   << COL_RESET;
+    }
+
+    /* Connect to port inspection service */
+    std::cout << COL_MAGENTA << "Port inspector: "
+              << sel.ip_address << ":" << PORTS_SERVICE_PORT << " ...\n"
+              << COL_RESET;
+    g_ports_sock = ports_remote_connect(sel.ip_address.c_str());
+    if (PORTS_SOCK_VALID(g_ports_sock)) {
+        std::cout << COL_GREEN << "Port inspector active  (press 'p' during stream)\n"
+                  << COL_RESET;
+    } else {
+        std::cout << COL_YELLOW << "Port inspector unavailable\n" << COL_RESET;
     }
 
     /* Connect stream socket */
     NetworkSocket conn;
     if (!conn.connect(sel.ip_address, sel.tcp_port)) {
         if (g_gpu_active) gpu_remote_disconnect(g_gpu_sock);
+        if (PORTS_SOCK_VALID(g_ports_sock)) ports_remote_disconnect(g_ports_sock);
         cleanupSockets(); return 1;
     }
 
@@ -623,6 +771,7 @@ int main()
     };
     if (!conn.sendAll(&hs_out, sizeof(hs_out))) {
         if (g_gpu_active) gpu_remote_disconnect(g_gpu_sock);
+        if (PORTS_SOCK_VALID(g_ports_sock)) ports_remote_disconnect(g_ports_sock);
         cleanupSockets(); return 1;
     }
 
@@ -635,6 +784,7 @@ int main()
     if (!conn.recvAll(&hs_in, sizeof(hs_in)) || ntohl(hs_in.status) != 0) {
         std::cerr << COL_RED << "Handshake response failed\n" << COL_RESET;
         if (g_gpu_active) gpu_remote_disconnect(g_gpu_sock);
+        if (PORTS_SOCK_VALID(g_ports_sock)) ports_remote_disconnect(g_ports_sock);
         cleanupSockets(); return 1;
     }
     RECV_WIDTH  = (int)ntohl(hs_in.recv_width);
@@ -747,6 +897,7 @@ int main()
               << COL_RESET;
 
     if (g_gpu_active) gpu_remote_disconnect(g_gpu_sock);
+    if (PORTS_SOCK_VALID(g_ports_sock)) ports_remote_disconnect(g_ports_sock);
     cleanupSockets();
     return 0;
 }

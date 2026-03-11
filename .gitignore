@@ -9,3 +9,6 @@ app
 /build/
 *.0
 *.exe
+
+#stats files
+*.json

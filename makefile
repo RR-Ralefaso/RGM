@@ -119,7 +119,7 @@ ifeq ($(OS),Windows_NT)
     SENDER_EXTRA   := -lgdi32
     RECEIVER_EXTRA :=
     APP_EXTRA      :=
-    LDFLAGS_COMMON := $(SDL_LIBS) -lws2_32 -lpthread
+    LDFLAGS_COMMON := $(SDL_LIBS) -lws2_32 -liphlpapi -lpthread
 endif
 
 # ============================================================================
@@ -142,6 +142,7 @@ APP_BIN      := app$(EXE)
 
 OBJ_DISCOVER := $(BUILDDIR)/discover.o
 OBJ_GPU      := $(BUILDDIR)/gpu_accelerate.o
+OBJ_PORTS    := $(BUILDDIR)/ports.o
 OBJ_APP      := $(BUILDDIR)/app.o
 OBJ_SENDER   := $(BUILDDIR)/sender.o
 OBJ_RECEIVER := $(BUILDDIR)/receiver.o
@@ -167,14 +168,17 @@ $(OBJ_DISCOVER): $(SRCDIR)/discover.cpp $(SRCDIR)/discover.h | $(BUILDDIR)
 $(OBJ_GPU): $(SRCDIR)/gpu_accelerate.c $(SRCDIR)/gpu_accelerate.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(OBJ_PORTS): $(SRCDIR)/ports.cpp $(SRCDIR)/ports.h | $(BUILDDIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 # ============================================================================
 # SENDER
 # ============================================================================
 
-$(OBJ_SENDER): $(SRCDIR)/sender.cpp $(SRCDIR)/discover.h $(SRCDIR)/gpu_accelerate.h | $(BUILDDIR)
+$(OBJ_SENDER): $(SRCDIR)/sender.cpp $(SRCDIR)/discover.h $(SRCDIR)/gpu_accelerate.h $(SRCDIR)/ports.h | $(BUILDDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(SENDER_BIN): $(OBJ_SENDER) $(OBJ_DISCOVER) $(OBJ_GPU)
+$(SENDER_BIN): $(OBJ_SENDER) $(OBJ_DISCOVER) $(OBJ_GPU) $(OBJ_PORTS)
 	$(CXX) $^ -o $@ $(LDFLAGS_COMMON) $(SENDER_EXTRA)
 	@echo "Built $(SENDER_BIN)"
 
@@ -182,10 +186,10 @@ $(SENDER_BIN): $(OBJ_SENDER) $(OBJ_DISCOVER) $(OBJ_GPU)
 # RECEIVER
 # ============================================================================
 
-$(OBJ_RECEIVER): $(SRCDIR)/receiver.cpp $(SRCDIR)/discover.h $(SRCDIR)/gpu_accelerate.h | $(BUILDDIR)
+$(OBJ_RECEIVER): $(SRCDIR)/receiver.cpp $(SRCDIR)/discover.h $(SRCDIR)/gpu_accelerate.h $(SRCDIR)/ports.h | $(BUILDDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(RECEIVER_BIN): $(OBJ_RECEIVER) $(OBJ_DISCOVER) $(OBJ_GPU)
+$(RECEIVER_BIN): $(OBJ_RECEIVER) $(OBJ_DISCOVER) $(OBJ_GPU) $(OBJ_PORTS)
 	$(CXX) $^ -o $@ $(LDFLAGS_COMMON) $(RECEIVER_EXTRA)
 	@echo "Built $(RECEIVER_BIN)"
 
@@ -269,7 +273,8 @@ run-demo:
 	@echo "  Firewall ports required:"
 	@echo "    UDP 1900   SSDP discovery"
 	@echo "    TCP 8081   video stream"
-	@echo "    TCP 8082   GPU offload service"
+	@echo "    TCP 8082   compute offload (CPU)"
+	@echo "    TCP 8083   port inspector"
 	@echo "========================================="
 
 # ============================================================================
@@ -288,7 +293,7 @@ check:
 	@echo "========================================="
 	@echo "  Source files:"
 	@for f in app.cpp sender.cpp receiver.cpp discover.cpp discover.h \
-	           gpu_accelerate.c gpu_accelerate.h; do \
+	           gpu_accelerate.c gpu_accelerate.h ports.cpp ports.h; do \
 	    if [ -f $(SRCDIR)/$$f ]; then \
 	        echo "    OK  $$f"; \
 	    else \

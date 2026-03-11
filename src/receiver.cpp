@@ -56,6 +56,7 @@
 #endif /* rcorp.jpeg splash */
 #include "discover.h"
 #include "gpu_accelerate.h"
+#include "ports.h"
 
 /* ── Platform headers ───────────────────────────────────────────────────── */
 #ifdef _WIN32
@@ -639,6 +640,14 @@ static void gpuServiceThread()
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+ * PORT SERVICE THREAD
+ * ══════════════════════════════════════════════════════════════════════════ */
+static void portServiceThread()
+{
+    ports_service_run();
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
  * GPU STATS WRITER THREAD
  * ══════════════════════════════════════════════════════════════════════════ */
 static void gpuStatsWriterThread()
@@ -1065,13 +1074,14 @@ int main()
     queryMyDisplaySize();
 
     std::cout << "========================================\n"
-              << "         RGM RECEIVER v2.0.1            \n"
+              << "         RGM RECEIVER v2.0.2            \n"
               << "========================================\n"
               << "  Local IP   : " << getLocalIPAddress() << "\n"
               << "  My display : " << MY_DISPLAY_WIDTH
               << "x" << MY_DISPLAY_HEIGHT << "\n"
               << "  Stream TCP : " << TCP_STREAM_PORT << "\n"
-              << "  GPU TCP    : " << GPU_ACCEL_PORT << "\n"
+              << "  Compute TCP: " << GPU_ACCEL_PORT << "\n"
+              << "  Ports TCP  : " << PORTS_SERVICE_PORT << "\n"
               << "  SSDP UDP   : " << SSDP_ADDR << ":" << SSDP_PORT << "\n"
               << "  GPU Stats  : " << GPU_STATS_FILE << "\n"
               << "  Modes      : extend-right | extend-below | mirror\n"
@@ -1084,6 +1094,7 @@ int main()
     }
 
     std::thread gpu_thread(gpuServiceThread);
+    std::thread port_thread(portServiceThread);
     std::thread ssdp_thread(ssdpAdvertisementThread);
     std::thread stats_thread(gpuStatsWriterThread);
 
@@ -1095,6 +1106,7 @@ int main()
         g_running = false;
         ssdp_thread.join();
         gpu_thread.join();
+        port_thread.join();
         stats_thread.join();
         cleanupSockets();
         return 1;
@@ -1116,6 +1128,7 @@ int main()
         g_running = false;
         ssdp_thread.join();
         gpu_thread.join();
+        port_thread.join();
         stats_thread.join();
         cleanupSockets();
         return 1;
@@ -1153,6 +1166,7 @@ int main()
     g_running = false; /* signal threads before joining */
     ssdp_thread.join();
     gpu_thread.join();
+    port_thread.join();
     stats_thread.join();
     cleanupSockets();
 
