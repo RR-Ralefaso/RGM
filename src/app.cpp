@@ -203,7 +203,7 @@ int showMenu()
         std::cout << "╚════════════════════════════════╝\n"
                   << COLOR_RESET;
 
-        std::cout << COLOR_BOLD << "\nEnter your choice (1-3): " << COLOR_RESET;
+        std::cout << COLOR_BOLD << "\nEnter your choice (0-2): " << COLOR_RESET;
         std::getline(std::cin, input);
 
         try
