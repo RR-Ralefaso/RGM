@@ -42,6 +42,7 @@
 #include <string>
 #include <fstream>
 #include <mutex>
+#include "storage.h"
 #include <map>
 
 #include <SDL2/SDL.h>
@@ -1097,6 +1098,7 @@ int main()
     std::thread port_thread(portServiceThread);
     std::thread ssdp_thread(ssdpAdvertisementThread);
     std::thread stats_thread(gpuStatsWriterThread);
+    std::thread storage_thread(storage_service_run);
 
     /* TCP stream server */
     plat_sock_t srv = socket(AF_INET, SOCK_STREAM, 0);
@@ -1108,6 +1110,7 @@ int main()
         gpu_thread.join();
         port_thread.join();
         stats_thread.join();
+        storage_thread.join();
         cleanupSockets();
         return 1;
     }

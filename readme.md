@@ -2,7 +2,7 @@
 
 <div align="center">
 
-**A zero-configuration screen extender with automatic network discovery**
+**A zero-configuration screen extender with automatic network discovery and remote management**
 
 [Star this Project](https://github.com/RR-Ralefaso/RGM) • [Become a Sponsor](https://github.com/sponsors/RR-Ralefaso) • [Report Issue](https://github.com/RR-Ralefaso/RGM/issues)
 
@@ -19,10 +19,12 @@ Your support helps maintain and improve RGM for everyone.
 - [Architecture](#architecture)
 - [How It Works](#how-it-works)
 - [Display Modes](#display-modes)
+- [Remote Management Features](#remote-management-features)
 - [System Requirements](#system-requirements)
 - [Installation](#installation)
 - [Building from Source](#building-from-source)
 - [Usage Guide](#usage-guide)
+- [Interactive Controls](#interactive-controls)
 - [Network Configuration](#network-configuration)
 - [Performance Characteristics](#performance-characteristics)
 - [Troubleshooting](#troubleshooting)
@@ -37,7 +39,7 @@ RGM (Ralefaso GlassMirror) is a lightweight, cross-platform **screen extender** 
 
 The receiver machine opens a **borderless fullscreen window** that presents itself as a natural display extension — positioned logically to the right of, or below, the sender's screen. The result looks and behaves like a real second monitor plugged into the sender machine.
 
-A mirror mode (classic screen duplication) is also available for presentations and demos.
+**New in v2.1:** Full remote management capabilities including port inspection and storage access, allowing you to monitor and control the receiver machine directly from the sender interface.
 
 ---
 
@@ -49,12 +51,14 @@ A mirror mode (classic screen duplication) is also available for presentations a
 | **Discovery** | Zero-configuration SSDP automatic detection, no IP setup needed |
 | **Performance** | 60 FPS streaming, 4 MB socket buffers, TCP_NODELAY optimisation |
 | **CPU Offload** | RLE frame compression and colour correction offloaded to the receiver's CPU (TCP 8082) |
-| **Port Inspector** | Full remote port inspection: list, query, and kill processes on any receiver port (TCP 8083) |
+| **Remote Management** | Full remote port inspection and storage access from sender |
+| **Port Inspector** | List, query, and kill processes on any receiver port (TCP 8083) |
+| **Storage Manager** | Browse, read, write, delete files on receiver filesystem (TCP 8084) |
 | **Platform Support** | Linux (X11), Windows 10/11, macOS 10.15+ |
 | **Display Handling** | Auto-resolution handshake, borderless fullscreen, aspect-ratio scaling |
 | **Splash Screen** | rcorp.jpeg corporate logo displayed at launch via SDL2_image |
 | **Monitoring** | Real-time FPS, bandwidth, source/destination resolution, real measured offload timing |
-| **User Interface** | Splash screen, menu-driven launcher, direct executable mode |
+| **User Interface** | Splash screen, menu-driven launcher, interactive controls during streaming |
 
 ---
 
@@ -67,14 +71,16 @@ RGM/
 ├── makefile                     # Cross-platform build (Linux/macOS/Windows)
 ├── src/                         # Source code
 │   ├── app.cpp                  # Launcher: splash + menu
-│   ├── sender.cpp               # Screen capture, extender handshake, stream, port inspector client
-│   ├── receiver.cpp             # Fullscreen display, SSDP advertiser, compute svc, port svc
+│   ├── sender.cpp               # Screen capture, extender handshake, stream, remote management client
+│   ├── receiver.cpp             # Fullscreen display, SSDP advertiser, compute svc, port svc, storage svc
 │   ├── discover.cpp             # SSDP discovery engine
 │   ├── discover.h               # Discovery API
 │   ├── gpu_accelerate.c         # Remote CPU offload (RLE compress / colorfix) with real timing
 │   ├── gpu_accelerate.h         # Compute offload API
 │   ├── ports.cpp                # Remote port inspection service (server + client)
-│   └── ports.h                  # Port inspector API
+│   ├── ports.h                  # Port inspector API
+│   ├── storage.cpp              # Remote storage access service (server + client)
+│   └── storage.h                # Storage manager API
 ├── assets/
 │   └── icons/
 │       ├── rcorp.jpeg           # Corporate splash logo  ← shown at startup
@@ -83,7 +89,7 @@ RGM/
 ├── sender                       # Sender executable
 ├── receiver                     # Receiver executable
 ├── app                          # Launcher executable
-└── readme.md
+└── README.md                    # This file
 ```
 
 ### Executables
@@ -91,8 +97,8 @@ RGM/
 | Executable | Role |
 |------------|------|
 | `app` | Menu launcher — choose send / receive mode |
-| `sender` | Captures local display, negotiates mode, streams frames, runs port inspector client |
-| `receiver` | Advertises via SSDP, opens fullscreen window, renders frames, runs compute and port services |
+| `sender` | Captures local display, negotiates mode, streams frames, runs remote management clients |
+| `receiver` | Advertises via SSDP, opens fullscreen window, renders frames, runs compute, port, and storage services |
 
 ### Network Ports
 
@@ -102,6 +108,7 @@ RGM/
 | 8081 | TCP | Video frame stream |
 | 8082 | TCP | CPU compute offload service (RLE compress / colour fix) |
 | 8083 | TCP | Remote port inspection service |
+| 8084 | TCP | Remote storage access service |
 
 ---
 
@@ -199,6 +206,27 @@ Port data is collected natively per platform:
 | macOS | `lsof -nP -iTCP -iUDP` |
 | Windows | `GetExtendedTcpTable` / `GetExtendedUdpTable` (iphlpapi) + `CreateToolhelp32Snapshot` |
 
+### 7 — Storage Access Service (port 8084) ⭐ NEW
+
+The receiver runs a fourth TCP server on port 8084 (`storage.cpp`) that provides secure remote filesystem access. The sender can browse, read, write, and manage files on the receiver with configurable permissions:
+
+| Operation | Description |
+|-----------|-------------|
+| LIST_DIR | List contents of a directory |
+| READ_FILE | Read file contents (with offset support) |
+| WRITE_FILE | Write data to a file (create/overwrite/append) |
+| DELETE_FILE | Delete a file |
+| MKDIR | Create a new directory |
+| GET_INFO | Get file/drive information |
+| GET_DRIVES | List available drives/mount points |
+
+**Security Features:**
+
+- Path sanitization to prevent directory traversal attacks
+- Read-only access by default (configurable at connection)
+- Admin mode for elevated access when needed
+- Restricted access to system directories unless explicitly permitted
+
 ### Streaming Architecture
 
 ```
@@ -214,7 +242,10 @@ Port data is collected natively per platform:
 │             │  TCP 8082     │                                          │
 │ port cmds   │  port proto   │  ports_service_run() on TCP 8083         │
 │ interactive │  ──────────►  │  (list/query/kill receiver ports)        │
-└─────────────┘  TCP 8083     └──────────────────────────────────────────┘
+│             │  TCP 8083     │                                          │
+│ storage cmds│  storage proto│  storage_service_run() on TCP 8084       │
+│ interactive │  ──────────►  │  (browse/read/write receiver files)      │
+└─────────────┘  TCP 8084     └──────────────────────────────────────────┘
 ```
 
 ---
@@ -251,6 +282,111 @@ The receiver's display appears **below** the sender's screen, with a blue top-ed
 ### Mirror
 
 The receiver displays an exact duplicate of the sender's screen in a normal resizable window. Use this for presentations.
+
+---
+
+## Remote Management Features
+
+### Port Inspector
+
+Press `p` during streaming to open the Port Inspector:
+
+```
+╔════════════════════════════════════════════════╗
+║           RECEIVER PORT INSPECTOR             ║
+╠════════════════════════════════════════════════╣
+║  1. List all TCP ports                        ║
+║  2. List all UDP ports                        ║
+║  3. List ALL ports                            ║
+║  4. Query specific port                       ║
+║  5. Kill process on port                      ║
+║  6. Show listening ports only                 ║
+║  7. Show established connections              ║
+║  8. Refresh statistics                        ║
+║  0. Back to stream                            ║
+╚════════════════════════════════════════════════╝
+```
+
+Example output:
+
+```
+Proto Local Address          Remote Address         State           PID    Process
+TCP   0.0.0.0:22             0.0.0.0:0              LISTEN          1234   sshd
+TCP   192.168.1.100:45678    192.168.1.50:443       ESTABLISHED     5678   firefox
+UDP   0.0.0.0:5353           0.0.0.0:0              UNKNOWN         9012   avahi-daemon
+```
+
+### Storage Manager
+
+Press `s` during streaming to open the Storage Manager:
+
+```
+╔════════════════════════════════════════════════╗
+║           RECEIVER STORAGE MANAGER            ║
+╠════════════════════════════════════════════════╣
+║  Current path: /home/user                      ║
+╠════════════════════════════════════════════════╣
+║  1. List current directory                     ║
+║  2. Change directory                           ║
+║  3. Read file                                  ║
+║  4. Upload file (write)                        ║
+║  5. Delete file                                ║
+║  6. Create directory                           ║
+║  7. Show drives/mount points                   ║
+║  8. File information                           ║
+║  0. Back to stream                             ║
+╚════════════════════════════════════════════════╝
+```
+
+Features:
+
+- **Read files** from receiver with automatic local save option
+- **Upload files** to receiver with progress indication
+- **Delete files** with confirmation
+- **Create directories**
+- **Browse drives/mount points** on Windows/Unix systems
+- **Path sanitization** prevents directory traversal attacks
+
+### GPU/CPU Statistics
+
+Press `g` during streaming to view performance metrics:
+
+```
+╔════════════════════════════════════════╗
+║        GPU OFFLOAD STATISTICS         ║
+╠════════════════════════════════════════╣
+║  GPU Offload: Enabled                  ║
+║  Compression: RLE                      ║
+║  Performance: Real-time                 ║
+║  Status: Connected to receiver          ║
+╚════════════════════════════════════════╝
+```
+
+### Interactive Menu
+
+Press `m` during streaming to open the main control menu:
+
+```
+╔════════════════════════════════════════╗
+║           RGM CONTROL MENU             ║
+╠════════════════════════════════════════╣
+║  [p] Port Inspector                    ║
+║      - View all TCP/UDP ports           ║
+║      - Kill processes by port           ║
+║                                        ║
+║  [s] Storage Manager                   ║
+║      - Browse receiver filesystem       ║
+║      - Read/write files                 ║
+║                                        ║
+║  [g] GPU/CPU Statistics                 ║
+║      - View compression ratios          ║
+║      - Monitor performance              ║
+║                                        ║
+║  [t] Toggle GPU offload (currently ON)  ║
+║  [q] Quit streaming                     ║
+║  [m] Show this menu                     ║
+╚════════════════════════════════════════╝
+```
 
 ---
 
@@ -307,7 +443,6 @@ git clone https://github.com/RR-Ralefaso/RGM.git
 cd RGM
 sudo apt update
 sudo apt install -y g++ make libx11-dev libsdl2-dev libsdl2-image-dev
-make install-deps
 make
 ./app
 ```
@@ -325,7 +460,7 @@ cd RGM && make && ./app
 ```bash
 sudo pacman -S gcc make libx11 sdl2 sdl2_image
 git clone https://github.com/RR-Ralefaso/RGM.git
-cd RGM && make install-deps && make && ./app
+cd RGM && make && ./app
 ```
 
 ### macOS
@@ -336,18 +471,17 @@ cd RGM && make install-deps && make && ./app
 
 brew install sdl2 sdl2_image
 git clone https://github.com/RR-Ralefaso/RGM.git
-cd RGM && make install-deps && make && ./app
+cd RGM && make && ./app
 ```
 
 ### Windows (MSYS2 / MinGW)
 
 ```bash
 # In MSYS2 MinGW64 shell
-pacman -S mingw-w64-x86_64-SDL2 mingw-w64-x86_64-SDL2_image
+pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-make mingw-w64-x86_64-SDL2 mingw-w64-x86_64-SDL2_image
 
 git clone https://github.com/RR-Ralefaso/RGM.git
 cd RGM
-make install-deps
 make
 ./app.exe
 ```
@@ -367,7 +501,9 @@ make
 | `make debug` | Build with `-g -O0 -DDEBUG` |
 | `make clean` | Remove all build output |
 | `make check` | Verify environment, sources, and assets |
-| `make install-deps` | Install system dependencies |
+| `make install-deps` | Install all system dependencies |
+| `make install-sdl2-image` | Install SDL2_image only (quick fix) |
+| `make help` | Show help message |
 
 ### Build Output
 
@@ -382,7 +518,8 @@ RGM/
     ├── app.o
     ├── discover.o
     ├── gpu_accelerate.o
-    └── ports.o
+    ├── ports.o
+    └── storage.o
 ```
 
 ---
@@ -398,15 +535,17 @@ RGM/
 ```
 
 Expected output:
+
 ```
 ========================================
-  RGM RECEIVER v2.0.1
+  RGM RECEIVER v2.1.0
 ========================================
   Local IP   : 192.168.1.105
   My display : 1920x1080
   Stream TCP : 8081
   Compute TCP: 8082
   Ports TCP  : 8083
+  Storage TCP: 8084
   SSDP UDP   : 239.255.255.250:1900
   GPU Stats  : gpu_stats.json
   Modes      : extend-right | extend-below | mirror
@@ -421,6 +560,7 @@ Waiting for sender on TCP 8081 ...
 ```
 
 Interactive session:
+
 ```
 Discovering receivers...
   Found: 192.168.1.105:8081 – testing...
@@ -438,8 +578,9 @@ RECEIVERS FOUND:
 
 Mode: Extend Right
 
-Remote compute (CPU offload) active
+Remote compute (GPU offload) active
 Port inspector active  (press 'p' during stream)
+Storage access active (read-only)  (press 's' during stream)
 
 Extended desktop active:
   Sender:   1920x1080
@@ -447,7 +588,7 @@ Extended desktop active:
   Layout:   Extend Right
   Total:    3840x1080
 
-Streaming – Ctrl+C to stop
+Streaming – Press 'm' for menu, Ctrl+C to stop
 ```
 
 The receiver's display immediately goes fullscreen and begins showing the sender's screen content.
@@ -462,7 +603,7 @@ The launcher shows the rcorp.jpeg splash screen then presents:
 
 ```
 ╔════════════════════════════════╗
-║      RGM v2.0.2                ║
+║      RGM v2.1.0                ║
 ╠════════════════════════════════╣
 ║                                ║
 ║  1.  SEND SCREEN               ║
@@ -471,6 +612,10 @@ The launcher shows the rcorp.jpeg splash screen then presents:
 ║                                ║
 ╚════════════════════════════════╝
 ```
+
+---
+
+## Interactive Controls
 
 ### Receiver Controls
 
@@ -487,26 +632,12 @@ The launcher shows the rcorp.jpeg splash screen then presents:
 | Ctrl+C | Graceful shutdown |
 | Number at prompt | Select receiver from list |
 | 1 / 2 / 3 at mode prompt | Choose Extend Right / Extend Below / Mirror |
-| `p` at stream prompt | Open Port Inspector menu |
-
-### Port Inspector Menu
-
-When the sender connects to a receiver, it also connects to the port inspection service on TCP 8083. Press `p` (or enter it at the prompt) to open the interactive menu:
-
-```
-╔════════════════════════════════╗
-║   RECEIVER PORT INSPECTOR      ║
-╠════════════════════════════════╣
-║  1. List all TCP ports         ║
-║  2. List all UDP ports         ║
-║  3. List ALL ports             ║
-║  4. Query specific port        ║
-║  5. Kill process on port       ║
-║  0. Back to stream             ║
-╚════════════════════════════════╝
-```
-
-The table output shows protocol, local address:port, remote address:port, TCP state, PID, and process name — all read live from the receiver OS. The kill option sends `SIGTERM` (Linux/macOS) or `TerminateProcess` (Windows) to the process owning the specified port.
+| `p` during streaming | Open Port Inspector |
+| `s` during streaming | Open Storage Manager |
+| `g` during streaming | View GPU/CPU statistics |
+| `m` during streaming | Show interactive menu |
+| `t` during streaming | Toggle GPU offload on/off |
+| `q` during streaming | Quit streaming |
 
 ---
 
@@ -521,6 +652,7 @@ sudo ufw allow 1900/udp comment 'RGM SSDP'
 sudo ufw allow 8081/tcp comment 'RGM Video Stream'
 sudo ufw allow 8082/tcp comment 'RGM Compute Offload'
 sudo ufw allow 8083/tcp comment 'RGM Port Inspector'
+sudo ufw allow 8084/tcp comment 'RGM Storage Access'
 sudo ufw reload
 ```
 
@@ -531,6 +663,7 @@ sudo iptables -A INPUT -p udp --dport 1900 -j ACCEPT
 sudo iptables -A INPUT -p tcp --dport 8081 -j ACCEPT
 sudo iptables -A INPUT -p tcp --dport 8082 -j ACCEPT
 sudo iptables -A INPUT -p tcp --dport 8083 -j ACCEPT
+sudo iptables -A INPUT -p tcp --dport 8084 -j ACCEPT
 ```
 
 #### Windows (PowerShell — Administrator)
@@ -540,6 +673,7 @@ New-NetFirewallRule -DisplayName "RGM SSDP"     -Direction Inbound -Protocol UDP
 New-NetFirewallRule -DisplayName "RGM Stream"   -Direction Inbound -Protocol TCP -LocalPort 8081 -Action Allow
 New-NetFirewallRule -DisplayName "RGM Compute"  -Direction Inbound -Protocol TCP -LocalPort 8082 -Action Allow
 New-NetFirewallRule -DisplayName "RGM Ports"    -Direction Inbound -Protocol TCP -LocalPort 8083 -Action Allow
+New-NetFirewallRule -DisplayName "RGM Storage"  -Direction Inbound -Protocol TCP -LocalPort 8084 -Action Allow
 ```
 
 #### macOS
@@ -594,6 +728,8 @@ The receiver writes live statistics to `gpu_stats.json` every 60 seconds and pri
 | Low FPS | Network utilisation | Use wired Ethernet; enable CPU offload |
 | Compute offload unavailable | Port 8082 blocked | Allow TCP 8082 in firewall on receiver |
 | Port inspector unavailable | Port 8083 blocked | Allow TCP 8083 in firewall on receiver |
+| Storage manager unavailable | Port 8084 blocked | Allow TCP 8084 in firewall on receiver |
+| Permission denied in storage | Access mode | Storage is read-only by default; need write permission |
 | rcorp.jpeg not showing | Asset path | Place `rcorp.jpeg` in `assets/icons/`; run `make check` |
 | SDL_image not found | Missing library | Run `make install-deps` or install `libsdl2-image-dev` |
 | Build fails on Windows | Missing iphlpapi | Ensure Windows SDK is installed; iphlpapi is linked automatically |
@@ -602,15 +738,16 @@ The receiver writes live statistics to `gpu_stats.json` every 60 seconds and pri
 ### Diagnostic Commands
 
 ```bash
-# Verify receiver is listening on all four ports
-netstat -tulpn | grep -E '8081|8082|8083|1900'
+# Verify receiver is listening on all five ports
+netstat -tulpn | grep -E '8081|8082|8083|8084|1900'
 
 # Test TCP reachability
 nc -zv <receiver-ip> 8081
 nc -zv <receiver-ip> 8082
 nc -zv <receiver-ip> 8083
+nc -zv <receiver-ip> 8084
 
-#ensure all dependancies are installed 
+# Ensure all dependencies are installed 
 make install-deps
 
 # Check assets and source files
@@ -634,7 +771,8 @@ make clean && make
 - [x] macOS CoreGraphics capture
 - [x] Remote port inspection service (TCP 8083)
 - [x] Per-client GPU stats tracking + JSON export
-- [ ] remote access ,full or partial , to all the storage of the Receiver
+- [x] Remote storage access service (TCP 8084) with read/write capabilities
+- [x] Interactive menu system during streaming
 - [ ] H.264/H.265 compression for bandwidth reduction
 - [ ] Audio capture and streaming
 - [ ] TLS encryption
@@ -643,7 +781,6 @@ make clean && make
 - [ ] Adaptive FPS based on network conditions
 - [ ] Wayland display server support
 - [ ] Mouse pointer handoff across display boundary
-- [ ] remote access ,full or partial , to all the storage of the Receiver
 
 ---
 

@@ -143,6 +143,7 @@ APP_BIN      := app$(EXE)
 OBJ_DISCOVER := $(BUILDDIR)/discover.o
 OBJ_GPU      := $(BUILDDIR)/gpu_accelerate.o
 OBJ_PORTS    := $(BUILDDIR)/ports.o
+OBJ_STORAGE  := $(BUILDDIR)/storage.o
 OBJ_APP      := $(BUILDDIR)/app.o
 OBJ_SENDER   := $(BUILDDIR)/sender.o
 OBJ_RECEIVER := $(BUILDDIR)/receiver.o
@@ -171,14 +172,17 @@ $(OBJ_GPU): $(SRCDIR)/gpu_accelerate.c $(SRCDIR)/gpu_accelerate.h | $(BUILDDIR)
 $(OBJ_PORTS): $(SRCDIR)/ports.cpp $(SRCDIR)/ports.h | $(BUILDDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+$(OBJ_STORAGE): $(SRCDIR)/storage.cpp $(SRCDIR)/storage.h | $(BUILDDIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 # ============================================================================
 # SENDER
 # ============================================================================
 
-$(OBJ_SENDER): $(SRCDIR)/sender.cpp $(SRCDIR)/discover.h $(SRCDIR)/gpu_accelerate.h $(SRCDIR)/ports.h | $(BUILDDIR)
+$(OBJ_SENDER): $(SRCDIR)/sender.cpp $(SRCDIR)/discover.h $(SRCDIR)/gpu_accelerate.h $(SRCDIR)/ports.h $(SRCDIR)/storage.h | $(BUILDDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(SENDER_BIN): $(OBJ_SENDER) $(OBJ_DISCOVER) $(OBJ_GPU) $(OBJ_PORTS)
+$(SENDER_BIN): $(OBJ_SENDER) $(OBJ_DISCOVER) $(OBJ_GPU) $(OBJ_PORTS) $(OBJ_STORAGE)
 	$(CXX) $^ -o $@ $(LDFLAGS_COMMON) $(SENDER_EXTRA)
 	@echo "Built $(SENDER_BIN)"
 
@@ -186,10 +190,10 @@ $(SENDER_BIN): $(OBJ_SENDER) $(OBJ_DISCOVER) $(OBJ_GPU) $(OBJ_PORTS)
 # RECEIVER
 # ============================================================================
 
-$(OBJ_RECEIVER): $(SRCDIR)/receiver.cpp $(SRCDIR)/discover.h $(SRCDIR)/gpu_accelerate.h $(SRCDIR)/ports.h | $(BUILDDIR)
+$(OBJ_RECEIVER): $(SRCDIR)/receiver.cpp $(SRCDIR)/discover.h $(SRCDIR)/gpu_accelerate.h $(SRCDIR)/ports.h $(SRCDIR)/storage.h | $(BUILDDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(RECEIVER_BIN): $(OBJ_RECEIVER) $(OBJ_DISCOVER) $(OBJ_GPU) $(OBJ_PORTS)
+$(RECEIVER_BIN): $(OBJ_RECEIVER) $(OBJ_DISCOVER) $(OBJ_GPU) $(OBJ_PORTS) $(OBJ_STORAGE)
 	$(CXX) $^ -o $@ $(LDFLAGS_COMMON) $(RECEIVER_EXTRA)
 	@echo "Built $(RECEIVER_BIN)"
 
@@ -270,11 +274,19 @@ run-demo:
 	@echo "            2  Extend Below  (receiver = bottom monitor)"
 	@echo "            3  Mirror        (duplicate screen)"
 	@echo ""
+	@echo "  During streaming, press:"
+	@echo "    p  – Port Inspector  (list/kill receiver ports)"
+	@echo "    s  – Storage Manager (browse/read/write receiver files)"
+	@echo "    g  – GPU Statistics  (view performance metrics)"
+	@echo "    m  – Show interactive menu"
+	@echo "    q  – Quit streaming"
+	@echo ""
 	@echo "  Firewall ports required:"
 	@echo "    UDP 1900   SSDP discovery"
 	@echo "    TCP 8081   video stream"
 	@echo "    TCP 8082   compute offload (CPU)"
 	@echo "    TCP 8083   port inspector"
+	@echo "    TCP 8084   storage access"
 	@echo "========================================="
 
 # ============================================================================
@@ -293,7 +305,8 @@ check:
 	@echo "========================================="
 	@echo "  Source files:"
 	@for f in app.cpp sender.cpp receiver.cpp discover.cpp discover.h \
-	           gpu_accelerate.c gpu_accelerate.h ports.cpp ports.h; do \
+	           gpu_accelerate.c gpu_accelerate.h ports.cpp ports.h \
+	           storage.cpp storage.h; do \
 	    if [ -f $(SRCDIR)/$$f ]; then \
 	        echo "    OK  $$f"; \
 	    else \
@@ -406,4 +419,12 @@ help:
 	@echo "  1  Extend Right   receiver appears as right monitor"
 	@echo "  2  Extend Below   receiver appears as bottom monitor"
 	@echo "  3  Mirror         duplicate sender screen"
+	@echo ""
+	@echo "INTERACTIVE CONTROLS (during streaming):"
+	@echo "  p  Open Port Inspector (list/kill receiver ports)"
+	@echo "  s  Open Storage Manager (browse/read/write receiver files)"
+	@echo "  g  View GPU/CPU statistics"
+	@echo "  m  Show interactive menu"
+	@echo "  t  Toggle GPU offload on/off"
+	@echo "  q  Quit streaming"
 	@echo ""

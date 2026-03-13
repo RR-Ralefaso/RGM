@@ -152,6 +152,18 @@ void ports_service_handle_client(int client_sock);
 /** Start the port service listener (blocking, run in a thread). */
 void ports_service_run(void);
 
+/**
+ * Convert IP bytes to string
+ */
+std::string ports_ip_to_string(const uint8_t *ip, uint8_t ver);
+
+/**
+ * Get state name string
+ */
+std::string ports_state_name(uint8_t state);
+
+
+
 #ifdef __cplusplus
 }   /* extern "C" */
 

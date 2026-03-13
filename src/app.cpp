@@ -16,13 +16,13 @@
 #include <SDL2/SDL.h>
 /* SDL2_image: required for rcorp.jpeg splash (install libsdl2-image-dev) */
 #if __has_include(<SDL2/SDL_image.h>)
-#  include <SDL2/SDL_image.h>
-#  define HAVE_SDL_IMAGE 1
+#include <SDL2/SDL_image.h>
+#define HAVE_SDL_IMAGE 1
 #else
-#  define HAVE_SDL_IMAGE 0
-#  warning "SDL2_image not found – splash will use fallback rectangle."
-#  warning "Fix: sudo apt install libsdl2-image-dev  (or: make install-sdl2-image)"
-#endif     /* PNG / JPEG loading */
+#define HAVE_SDL_IMAGE 0
+#warning "SDL2_image not found – splash will use fallback rectangle."
+#warning "Fix: sudo apt install libsdl2-image-dev  (or: make install-sdl2-image)"
+#endif /* PNG / JPEG loading */
 
 #ifdef _WIN32
 #include <windows.h>
@@ -34,7 +34,7 @@
 
 // Version information
 #define VERSION "2.0.2"
-#define APP_NAME "RGM(Ralefaso GlassMirror)"
+#define APP_NAME "RGM (Ralefaso GlassMirror)"
 
 // Splash screen constants
 #define SPLASH_WIDTH 500
@@ -60,7 +60,8 @@ void showSplashScreen()
     std::cout << COLOR_CYAN << COLOR_BOLD;
     std::cout << "========================================\n";
     std::cout << "    RGM LAUNCHER v" << VERSION << "\n";
-    std::cout << "========================================\n" << COLOR_RESET;
+    std::cout << "========================================\n"
+              << COLOR_RESET;
 
     if (SDL_Init(SDL_INIT_VIDEO) < 0)
     {
@@ -85,7 +86,8 @@ void showSplashScreen()
 #if HAVE_SDL_IMAGE
         IMG_Quit();
 #endif
-        SDL_Quit(); return;
+        SDL_Quit();
+        return;
     }
 
     SDL_Renderer *splashRenderer = SDL_CreateRenderer(splashWindow, -1, SDL_RENDERER_ACCELERATED);
@@ -95,7 +97,8 @@ void showSplashScreen()
 #if HAVE_SDL_IMAGE
         IMG_Quit();
 #endif
-        SDL_Quit(); return;
+        SDL_Quit();
+        return;
     }
 
     /* Dark background */
@@ -107,8 +110,8 @@ void showSplashScreen()
      * IMG_Load handles JPEG and PNG natively; no ifstream pre-check needed. */
     SDL_Surface *image = nullptr;
     const char *possiblePaths[] = {
-        "../assets/icons/rcorp.jpeg",   /* running from build/        */
-        "assets/icons/RGM.png",      /* running from project root  */
+        "../assets/icons/rcorp.jpeg", /* running from build/        */
+        "assets/icons/rcorp.jpeg",    /* running from project root  */
         "../assets/icons/RGM.png",
         "assets/icons/RGM.png",
 #ifndef _WIN32
@@ -144,11 +147,13 @@ void showSplashScreen()
             SDL_QueryTexture(texture, NULL, NULL, &tw, &th);
             float sx = (float)(SPLASH_WIDTH - 20) / (float)tw;
             float sy = (float)(SPLASH_HEIGHT - 20) / (float)th;
-            float sc = (sx < sy) ? sx : sy; if (sc > 1.0f) sc = 1.0f;
+            float sc = (sx < sy) ? sx : sy;
+            if (sc > 1.0f)
+                sc = 1.0f;
             SDL_Rect destRect;
             destRect.w = (int)(tw * sc);
             destRect.h = (int)(th * sc);
-            destRect.x = (SPLASH_WIDTH  - destRect.w) / 2;
+            destRect.x = (SPLASH_WIDTH - destRect.w) / 2;
             destRect.y = (SPLASH_HEIGHT - destRect.h) / 2;
 
             SDL_SetRenderDrawColor(splashRenderer, 18, 18, 28, 255);
@@ -186,9 +191,9 @@ int showMenu()
     while (choice < 0 || choice > 2)
     {
 #ifdef _WIN32
-        std::cout<<"cls"<<std::endl;
+        system("cls");
 #else
-        std::cout<<"clear"<<std::endl;
+        system("clear");
 #endif
 
         std::cout << COLOR_CYAN << COLOR_BOLD;
@@ -196,9 +201,9 @@ int showMenu()
         std::cout << "║               RGM v" << VERSION << "       ║\n";
         std::cout << "╠════════════════════════════════╣\n";
         std::cout << "║                                ║\n";
-        std::cout << "║  " << COLOR_GREEN <<  "1.   SEND SCREEN              " << COLOR_CYAN << "║\n";
-        std::cout << "║  " << COLOR_YELLOW <<  "2.   RECEIVE SCREEN           " << COLOR_CYAN << "║\n";
-        std::cout << "║  " << COLOR_RED <<    "0.   EXIT                     " << COLOR_CYAN << "║\n";
+        std::cout << "║  " << COLOR_GREEN << "1.   SEND SCREEN              " << COLOR_CYAN << "║\n";
+        std::cout << "║  " << COLOR_YELLOW << "2.   RECEIVE SCREEN           " << COLOR_CYAN << "║\n";
+        std::cout << "║  " << COLOR_RED << "0.   EXIT                     " << COLOR_CYAN << "║\n";
         std::cout << "║                                ║\n";
         std::cout << "╚════════════════════════════════╝\n"
                   << COLOR_RESET;
@@ -214,12 +219,6 @@ int showMenu()
         {
             choice = -1;
         }
-        // if (choice==3){
-        //     // void sendCtrlC(); //dangerous fix later
-        //     // sendCtrlC();
-        //     std::cout << "Exiting safely...\n";
-        //     std::exit(0); 
-        // }
 
         if (choice < 0 || choice > 2)
         {
@@ -227,60 +226,10 @@ int showMenu()
                       << COLOR_RESET;
             std::this_thread::sleep_for(std::chrono::seconds(2));
         }
-
     }
 
     return choice;
 }
-
-
-// /*
-// * creating a control c (cross+platform)
-// */
-
-// void sendCtrlC(){
-// #ifdef _WIN32
-//     // Windows-specific SendInput code
-//     std::cout << "Simulating Ctrl+C on Windows..." << std::endl;
-
-//     // Simulating CTRL + C using the Windows API (SendInput)
-//     INPUT input[4] = {}; // We'll need 4 inputs: CTRL down, C down, C up, CTRL up
-
-//     // Press CTRL
-//     input[0].type = INPUT_KEYBOARD;
-//     input[0].ki.wVk = VK_CONTROL; // Virtual key code for CTRL
-
-//     // Press 'C'
-//     input[1].type = INPUT_KEYBOARD;
-//     input[1].ki.wVk = 0x43; // Virtual key code for 'C'
-
-//     // Release 'C'
-//     input[2].type = INPUT_KEYBOARD;
-//     input[2].ki.wVk = 0x43; // Virtual key code for 'C'
-//     input[2].ki.dwFlags = KEYEVENTF_KEYUP;
-
-//     // Release CTRL
-//     input[3].type = INPUT_KEYBOARD;
-//     input[3].ki.wVk = VK_CONTROL; // Virtual key code for CTRL
-//     input[3].ki.dwFlags = KEYEVENTF_KEYUP;
-
-//     // Send the input events
-//     SendInput(4, input, sizeof(INPUT));
-
-// #elif __APPLE__
-//     // macOS-specific AppleScript code
-//     std::cout << "Simulating Command+C on macOS..." << std::endl;
-//     system("osascript -e 'tell application \"System Events\" to keystroke \"c\" using {command down}'");
-
-// #elif __linux__
-//     // Linux-specific X11/uinput code
-//     std::cout << "Simulating Ctrl+C on Linux..." << std::endl;
-
-//     // Usually requires 'xdotool' to be installed
-//     system("xdotool key ctrl+c");
-
-// #endif
-// }
 
 /**
  * Run sender

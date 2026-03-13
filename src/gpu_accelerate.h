@@ -58,6 +58,16 @@ typedef int gpu_sock_t;
     /** Start the GPU service listener – run in a dedicated thread (blocking). */
     void gpu_service_run(void);
 
+    /**
+     * Request GPU statistics from receiver
+     */
+    int gpu_request_stats(gpu_sock_t sock);
+
+    /**
+     * Print GPU statistics
+     */
+    void gpu_print_stats(gpu_sock_t sock);
+
 #ifdef __cplusplus
 }
 #endif

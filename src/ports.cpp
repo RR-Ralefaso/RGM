@@ -826,3 +826,19 @@ std::string ports_entry_to_string(const PortEntry &e)
        << e.process;
     return ss.str();
 }
+
+
+
+std::string ports_ip_to_string(const uint8_t *ip, uint8_t ver)
+{
+    char buf[INET6_ADDRSTRLEN] = {0};
+    if (ver == 6)
+    {
+        inet_ntop(AF_INET6, ip, buf, sizeof(buf));
+    }
+    else
+    {
+        inet_ntop(AF_INET, ip, buf, sizeof(buf));
+    }
+    return buf;
+}
