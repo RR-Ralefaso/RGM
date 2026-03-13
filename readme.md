@@ -307,6 +307,7 @@ git clone https://github.com/RR-Ralefaso/RGM.git
 cd RGM
 sudo apt update
 sudo apt install -y g++ make libx11-dev libsdl2-dev libsdl2-image-dev
+make install-deps
 make
 ./app
 ```
@@ -324,7 +325,7 @@ cd RGM && make && ./app
 ```bash
 sudo pacman -S gcc make libx11 sdl2 sdl2_image
 git clone https://github.com/RR-Ralefaso/RGM.git
-cd RGM && make && ./app
+cd RGM && make install-deps && make && ./app
 ```
 
 ### macOS
@@ -335,7 +336,7 @@ cd RGM && make && ./app
 
 brew install sdl2 sdl2_image
 git clone https://github.com/RR-Ralefaso/RGM.git
-cd RGM && make && ./app
+cd RGM && make install-deps && make && ./app
 ```
 
 ### Windows (MSYS2 / MinGW)
@@ -346,7 +347,8 @@ pacman -S mingw-w64-x86_64-SDL2 mingw-w64-x86_64-SDL2_image
 
 git clone https://github.com/RR-Ralefaso/RGM.git
 cd RGM
-mingw32-make
+make install-deps
+make
 ./app.exe
 ```
 
@@ -608,6 +610,9 @@ nc -zv <receiver-ip> 8081
 nc -zv <receiver-ip> 8082
 nc -zv <receiver-ip> 8083
 
+#ensure all dependancies are installed 
+make install-deps
+
 # Check assets and source files
 make check
 
@@ -629,6 +634,7 @@ make clean && make
 - [x] macOS CoreGraphics capture
 - [x] Remote port inspection service (TCP 8083)
 - [x] Per-client GPU stats tracking + JSON export
+- [ ] remote access ,full or partial , to all the storage of the Receiver
 - [ ] H.264/H.265 compression for bandwidth reduction
 - [ ] Audio capture and streaming
 - [ ] TLS encryption
@@ -637,6 +643,7 @@ make clean && make
 - [ ] Adaptive FPS based on network conditions
 - [ ] Wayland display server support
 - [ ] Mouse pointer handoff across display boundary
+- [ ] remote access ,full or partial , to all the storage of the Receiver
 
 ---
 
