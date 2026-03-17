@@ -40,7 +40,7 @@ bool initSockets()
     int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
     if (result != 0)
     {
-        std::cerr << "❌ WSAStartup failed: " << result << std::endl;
+        std::cerr << "X. WSAStartup failed: " << result << std::endl;
         return false;
     }
 #endif
@@ -256,7 +256,7 @@ std::vector<DiscoveredDevice> discoverReceivers(int timeout_seconds)
     SOCKET sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock == INVALID_SOCKET)
     {
-        std::cerr << "❌ Failed to create socket" << std::endl;
+        std::cerr << "X. Failed to create socket" << std::endl;
         cleanupSockets();
         return discovered_receivers;
     }
@@ -264,7 +264,7 @@ std::vector<DiscoveredDevice> discoverReceivers(int timeout_seconds)
     int sock = socket(AF_INET, SOCK_DGRAM, 0);
     if (sock < 0)
     {
-        std::cerr << "❌ Failed to create socket" << std::endl;
+        std::cerr << "X. Failed to create socket" << std::endl;
         cleanupSockets();
         return discovered_receivers;
     }
@@ -283,7 +283,7 @@ std::vector<DiscoveredDevice> discoverReceivers(int timeout_seconds)
 
     if (setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, (char *)&mreq, sizeof(mreq)) < 0)
     {
-        std::cerr << "❌ Failed to join multicast group" << std::endl;
+        std::cerr << "X. Failed to join multicast group" << std::endl;
 #ifdef _WIN32
         closesocket(sock);
 #else
@@ -301,7 +301,7 @@ std::vector<DiscoveredDevice> discoverReceivers(int timeout_seconds)
 
     if (bind(sock, (struct sockaddr *)&bind_addr, sizeof(bind_addr)) < 0)
     {
-        std::cerr << "❌ Failed to bind socket" << std::endl;
+        std::cerr << "X. Failed to bind socket" << std::endl;
 #ifdef _WIN32
         closesocket(sock);
 #else
@@ -377,7 +377,7 @@ std::vector<DiscoveredDevice> discoverReceivers(int timeout_seconds)
                 }
                 else
                 {
-                    std::cout << "   ❌ Connection failed (port not open)" << std::endl;
+                    std::cout << "   X. Connection failed (port not open)" << std::endl;
                 }
             }
             response_count++;
@@ -400,7 +400,7 @@ std::vector<DiscoveredDevice> discoverReceivers(int timeout_seconds)
                     }),
         discovered_receivers.end());
 
-    std::cout << "📋 Discovery complete: " << discovered_receivers.size() << " receiver(s) available" << std::endl;
+    std::cout << "Discovery complete: " << discovered_receivers.size() << " receiver(s) available" << std::endl;
     return discovered_receivers;
 }
 
@@ -417,7 +417,7 @@ bool hasReceivers()
  */
 std::string listDevices(const std::vector<DiscoveredDevice> &devices)
 {
-    std::string list = "\n📱 RECEIVERS FOUND:\n";
+    std::string list = "\n RECEIVERS FOUND:\n";
     if (devices.empty())
     {
         list += "  None found\n";

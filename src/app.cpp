@@ -223,7 +223,7 @@ int showMenu()
 
         if (choice < 0 || choice > 2)
         {
-            std::cout << COLOR_RED << "❌ Invalid choice. Please enter 0, 1, or 2.\n"
+            std::cout << COLOR_RED << "X. Invalid choice. Please enter 0, 1, or 2.\n"
                       << COLOR_RESET;
             std::this_thread::sleep_for(std::chrono::seconds(2));
         }
@@ -287,7 +287,7 @@ int showMenu()
  */
 void runSender()
 {
-    std::cout << COLOR_GREEN << "\n🎥 Starting Sender mode..." << COLOR_RESET << std::endl;
+    std::cout << COLOR_GREEN << "\n Starting SENDER mode..." << COLOR_RESET << std::endl;
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
 #ifdef _WIN32
@@ -302,7 +302,7 @@ void runSender()
     }
     else
     {
-        std::cerr << COLOR_RED << "❌ Failed to start sender.exe" << COLOR_RESET << std::endl;
+        std::cerr << COLOR_RED << "X. Failed to start sender.exe" << COLOR_RESET << std::endl;
     }
 #else
     pid_t pid = fork();
@@ -310,7 +310,7 @@ void runSender()
     if (pid == 0)
     {
         execl("./sender", "sender", (char *)NULL);
-        std::cerr << COLOR_RED << "❌ Failed to start sender" << COLOR_RESET << std::endl;
+        std::cerr << COLOR_RED << "X. Failed to start SENDER" << COLOR_RESET << std::endl;
         exit(1);
     }
     else if (pid > 0)
@@ -320,7 +320,7 @@ void runSender()
     }
     else
     {
-        std::cerr << COLOR_RED << "❌ Failed to fork process" << COLOR_RESET << std::endl;
+        std::cerr << COLOR_RED << "X. Failed to fork process" << COLOR_RESET << std::endl;
     }
 #endif
 
@@ -333,7 +333,7 @@ void runSender()
  */
 void runReceiver()
 {
-    std::cout << COLOR_YELLOW << "\n📺 Starting Receiver mode..." << COLOR_RESET << std::endl;
+    std::cout << COLOR_YELLOW << "\n Starting RECEIVER mode..." << COLOR_RESET << std::endl;
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
 #ifdef _WIN32
@@ -348,7 +348,7 @@ void runReceiver()
     }
     else
     {
-        std::cerr << COLOR_RED << "❌ Failed to start receiver.exe" << COLOR_RESET << std::endl;
+        std::cerr << COLOR_RED << "X. Failed to start receiver.exe" << COLOR_RESET << std::endl;
     }
 #else
     pid_t pid = fork();
@@ -356,7 +356,7 @@ void runReceiver()
     if (pid == 0)
     {
         execl("./receiver", "receiver", (char *)NULL);
-        std::cerr << COLOR_RED << "❌ Failed to start receiver" << COLOR_RESET << std::endl;
+        std::cerr << COLOR_RED << "X. Failed to start RECEIVER" << COLOR_RESET << std::endl;
         exit(1);
     }
     else if (pid > 0)
@@ -366,7 +366,7 @@ void runReceiver()
     }
     else
     {
-        std::cerr << COLOR_RED << "❌ Failed to fork process" << COLOR_RESET << std::endl;
+        std::cerr << COLOR_RED << "X. Failed to fork process" << COLOR_RESET << std::endl;
     }
 #endif
 
@@ -395,9 +395,9 @@ bool checkExecutables()
         std::cout << COLOR_RED << "\n⚠  Missing executables!\n"
                   << COLOR_RESET;
         if (!senderExists)
-            std::cout << "   - sender" << (!senderExists ? "❌" : "✓") << std::endl;
+            std::cout << "   - sender" << (!senderExists ? "X." : "✓") << std::endl;
         if (!receiverExists)
-            std::cout << "   - receiver" << (!receiverExists ? "❌" : "✓") << std::endl;
+            std::cout << "   - receiver" << (!receiverExists ? "X." : "✓") << std::endl;
         std::cout << COLOR_YELLOW << "\nPlease run 'make' first to build the applications.\n"
                   << COLOR_RESET;
         return false;
