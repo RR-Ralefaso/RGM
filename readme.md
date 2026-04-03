@@ -634,7 +634,7 @@ make clean && make
 - [x] macOS CoreGraphics capture
 - [x] Remote port inspection service (TCP 8083)
 - [x] Per-client GPU stats tracking + JSON export
-- [ ] remote access ,full or partial , to all the storage of the Receiver
+- [ ] app hosting onto receiver making receiver run the heavy tasks on it rather than everything running on sender
 - [ ] H.264/H.265 compression for bandwidth reduction
 - [ ] Audio capture and streaming
 - [ ] TLS encryption
