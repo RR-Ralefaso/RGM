@@ -21,6 +21,7 @@
 #  include <unistd.h>
 #  include <time.h>
 #endif
+#include <linux/time.h>
 
 /* Wire constants */
 #define GPU_MAGIC        0x47505541u
