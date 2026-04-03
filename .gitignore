@@ -6,9 +6,9 @@ app
 *.txt
 
 #folders to ignore:
-/build/
-*.0
-*.exe
+build/
+.vscode/
 
 #stats files
 *.json
+
