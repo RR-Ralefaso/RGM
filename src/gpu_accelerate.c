@@ -11,17 +11,16 @@
 #include <stdint.h>
 
 #ifdef _WIN32
-#  define WIN32_LEAN_AND_MEAN
-#  include <winsock2.h>
-#  include <ws2tcpip.h>
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #else
-#  include <sys/socket.h>
-#  include <netinet/in.h>
-#  include <arpa/inet.h>
-#  include <unistd.h>
-#  include <time.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <time.h>
 #endif
-#include <linux/time.h>
 
 /* Wire constants */
 #define GPU_MAGIC        0x47505541u
