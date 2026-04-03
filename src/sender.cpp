@@ -168,7 +168,7 @@ static void showSplashScreen()
 #endif
 
     SDL_Window *win = SDL_CreateWindow(
-        "RGM", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        "RalefasoGlassMirror(RGM)", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         480, 300, SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALWAYS_ON_TOP);
     if (!win) {
 #if HAVE_SDL_IMAGE
