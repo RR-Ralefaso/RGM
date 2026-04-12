@@ -50,6 +50,7 @@ typedef struct {
 } GpuResponse;
 #pragma pack(pop)
 
+
 /* ─── Real monotonic timer (ms) ─────────────────────────────── */
 static double now_ms(void)
 {
