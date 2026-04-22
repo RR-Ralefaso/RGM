@@ -98,7 +98,7 @@
 
 /* ── Constants ──────────────────────────────────────────────────────────── */
 #define BYTES_PER_PIXEL       3
-#define CONNECTION_TIMEOUT_MS 5000
+#define CONNECTION_TIMEOUT_MS 10000//5000
 #define STATS_INTERVAL_SEC    5
 #define MAX_FRAME_SKIP        3
 #define MAX_FRAME_BYTES       (7680u * 4320u * 3u)
@@ -127,7 +127,7 @@ static const int SOCK_BUF = 4 * 1024 * 1024;
 /* ── Globals ─────────────────────────────────────────────────────────────── */
 static int SCREEN_WIDTH  = 1920;
 static int SCREEN_HEIGHT = 1080;
-static int TARGET_FPS    = 60;
+static int TARGET_FPS    = 120;
 static uint32_t DISPLAY_MODE = MODE_EXTEND_RIGHT;  /* default: extend */
 
 /* Receiver display dimensions (filled after handshake response) */
