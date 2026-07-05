@@ -152,26 +152,12 @@ $(BUILDDIR):
 # COMPILATION RULES (Using High-Performance Pattern Matching)
 # ============================================================================
 
-<<<<<<< HEAD
-$(OBJ_DISCOVER): $(SRCDIR)/discover.cpp $(SRCDIR)/discover.h | $(BUILDDIR)
-	$(CXX) $(CXXFLAGS) -c $< -o -O3 $@
-=======
 $(BUILDDIR)/%.o: $(SRCDIR)/%.cpp | $(BUILDDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
->>>>>>> 93a66f26473d679810bb3f5b52811085146969dc
 
-<<<<<<< HEAD
-$(OBJ_GPU): $(SRCDIR)/gpu_accelerate.c $(SRCDIR)/gpu_accelerate.h | $(BUILDDIR)
-	$(CC) $(CFLAGS) -c $< -o  -O3 $@
-=======
 $(BUILDDIR)/%.o: $(SRCDIR)/%.c | $(BUILDDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
->>>>>>> 93a66f26473d679810bb3f5b52811085146969dc
 
-<<<<<<< HEAD
-$(OBJ_PORTS): $(SRCDIR)/ports.cpp $(SRCDIR)/ports.h | $(BUILDDIR)
-	$(CXX) $(CXXFLAGS) -c $< -o -O3  $@
-=======
 # Header Change Tracking Maps
 $(OBJ_DISCOVER): $(SRCDIR)/discover.h
 $(OBJ_PORTS): $(SRCDIR)/ports.h
@@ -179,46 +165,19 @@ $(OBJ_GPU): $(SRCDIR)/gpu_accelerate.h
 $(OBJ_APP): $(SRCDIR)/app.cpp
 $(OBJ_SENDER): $(SRCDIR)/discover.h $(SRCDIR)/gpu_accelerate.h $(SRCDIR)/ports.h
 $(OBJ_RECEIVER): $(SRCDIR)/discover.h $(SRCDIR)/gpu_accelerate.h $(SRCDIR)/ports.h
->>>>>>> 93a66f26473d679810bb3f5b52811085146969dc
 
 # ============================================================================
 # TARGET LINKING
 # ============================================================================
 
-<<<<<<< HEAD
-$(OBJ_SENDER): $(SRCDIR)/sender.cpp $(SRCDIR)/discover.h $(SRCDIR)/gpu_accelerate.h $(SRCDIR)/ports.h | $(BUILDDIR)
-	$(CXX) $(CXXFLAGS) -c $< -o -O3  $@
-
-=======
->>>>>>> 93a66f26473d679810bb3f5b52811085146969dc
 $(SENDER_BIN): $(OBJ_SENDER) $(OBJ_DISCOVER) $(OBJ_GPU) $(OBJ_PORTS)
 	$(CXX) $^ -o -O3  $@ $(LDFLAGS_COMMON) $(SENDER_EXTRA)
 	@echo "Built $(SENDER_BIN)"
 
-<<<<<<< HEAD
-# ============================================================================
-# RECEIVER
-# ============================================================================
-
-$(OBJ_RECEIVER): $(SRCDIR)/receiver.cpp $(SRCDIR)/discover.h $(SRCDIR)/gpu_accelerate.h $(SRCDIR)/ports.h | $(BUILDDIR)
-	$(CXX) $(CXXFLAGS) -c $< -o -O3 $@
-
-=======
->>>>>>> 93a66f26473d679810bb3f5b52811085146969dc
 $(RECEIVER_BIN): $(OBJ_RECEIVER) $(OBJ_DISCOVER) $(OBJ_GPU) $(OBJ_PORTS)
 	$(CXX) $^ -o -O3  $@ $(LDFLAGS_COMMON) $(RECEIVER_EXTRA)
 	@echo "Built $(RECEIVER_BIN)"
 
-<<<<<<< HEAD
-# ============================================================================
-# APP LAUNCHER
-# ============================================================================
-
-$(OBJ_APP): $(SRCDIR)/app.cpp | $(BUILDDIR)
-	$(CXX) $(CXXFLAGS) -c $< -o -O3 $@
-
-=======
->>>>>>> 93a66f26473d679810bb3f5b52811085146969dc
 $(APP_BIN): $(OBJ_APP) $(OBJ_DISCOVER)
 	$(CXX) $^ -o -O3 $@ $(LDFLAGS_COMMON) $(APP_EXTRA)
 	@echo "Built $(APP_BIN)"
