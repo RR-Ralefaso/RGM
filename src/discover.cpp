@@ -183,18 +183,48 @@ bool testTcpConnection(const std::string &ip, int port, int timeout_ms)
 bool parseSsdpResponse(const std::string &response, std::string &ip, int &port)
 {
     size_t loc_pos = response.find("LOCATION: ");
-    if (loc_pos == std::string::npos)
-        loc_pos = response.find("Location: ");
+    // if (loc_pos == std::string::npos)
+    //     loc_pos = response.find("Location: ");
 
-    if (loc_pos == std::string::npos)
+    // if (loc_pos == std::string::npos)
+    //     return false;
+
+    switch (loc_pos) {
+        case std::string::npos:
+            loc_pos = response.find("Location");
+            break;
+
+        default:
+            return false;
+    }
+
+    // size_t line_end = response.find("\r\n", loc_pos);
+    // if (line_end == std::string::npos)
+    //     line_end = response.find("\n", loc_pos);
+
+    // if (line_end == std::string::npos)
+    //     return false;
+
+
+    size_t line_end = response.find_first_of("\r\n", loc_pos);
+
+    if (line_end == std::string::npos) {
         return false;
+    }
 
-    size_t line_end = response.find("\r\n", loc_pos);
-    if (line_end == std::string::npos)
-        line_end = response.find("\n", loc_pos);
+    switch (response[line_end]) {
+        case '\r':
+            if (line_end + 1 < response.length() && response[line_end + 1] == '\n') {
+                break; 
+            }
+            return false; 
 
-    if (line_end == std::string::npos)
-        return false;
+        case '\n':
+            break;
+
+        default:
+            return false;
+    }
 
     std::string url = response.substr(loc_pos + 10, line_end - loc_pos - 10);
 
