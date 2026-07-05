@@ -28,7 +28,7 @@
 
 static const char *SSDP_MULTICAST_GROUP = "239.255.255.250";
 static const int SSDP_MULTICAST_PORT = 1900;
-static const int SOCKET_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB socket buffer
+static const int SOCKET_BUFFER_SIZE = 8 * 1024 * 1024; // 8MB socket buffer
 
 /**
  * Initialize sockets (Windows only)
