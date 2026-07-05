@@ -207,7 +207,6 @@ bool parseSsdpResponse(const std::string &response, std::string &ip, int &port)
 
 
     size_t line_end = response.find_first_of("\r\n", loc_pos);
-
     if (line_end == std::string::npos) {
         return false;
     }
